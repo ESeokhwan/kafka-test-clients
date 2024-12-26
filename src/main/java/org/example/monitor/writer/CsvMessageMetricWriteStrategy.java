@@ -1,0 +1,58 @@
+package org.example.monitor.writer;
+
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+
+import org.example.monitor.MessageMetric;
+
+public class CsvMessageMetricWriteStrategy implements IMessageMetricWriteStrategy {
+
+  private final String filepath;
+
+  private BufferedWriter writer;
+
+  public CsvMessageMetricWriteStrategy(String filepath) {
+    this.filepath = filepath;
+  }
+
+  @Override
+  public void write(MessageMetric metric) {
+    if (writer == null) {
+      try {
+        this.writer = new BufferedWriter(new FileWriter(filepath));
+        writer.append("message id,produceRequested at,produceResponded at,consumed at,E2E Latency,Producer Latency\n");
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+    
+    try {
+      writer.append(metric.getMessageId())
+          .append(",")
+          .append(String.valueOf(metric.getProduceRequestedAt()))
+          .append(",")
+          .append(String.valueOf(metric.getProduceRespondedAt()))
+          .append(",")
+          .append(String.valueOf(metric.getConsumedAt()))
+          .append(",")
+          .append(String.valueOf(metric.getE2ELatency()))
+          .append(",")
+          .append(String.valueOf(metric.getProduceLatency()))
+          .append("\n");
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+  }
+
+  @Override
+  public boolean commit() {
+    try {
+      this.writer.flush();
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+    return true;
+  }
+  
+}
