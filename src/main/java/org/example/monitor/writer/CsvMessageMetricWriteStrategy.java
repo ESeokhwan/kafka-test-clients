@@ -30,15 +30,15 @@ public class CsvMessageMetricWriteStrategy implements IMessageMetricWriteStrateg
     try {
       writer.append(metric.getMessageId())
           .append(",")
-          .append(String.valueOf(metric.getProduceRequestedAt()))
+          .append(String.valueOf((double) metric.getProduceRequestedAt() / 1_000_000.0))
           .append(",")
-          .append(String.valueOf(metric.getProduceRespondedAt()))
+          .append(String.valueOf((double) metric.getProduceRespondedAt() / 1_000_000.0))
           .append(",")
-          .append(String.valueOf(metric.getConsumedAt()))
+          .append(String.valueOf((double) metric.getConsumedAt() / 1_000_000.0))
           .append(",")
-          .append(String.valueOf(metric.getE2ELatency()))
+          .append(String.valueOf((double) metric.getE2ELatency() / 1_000_000.0))
           .append(",")
-          .append(String.valueOf(metric.getProduceLatency()))
+          .append(String.valueOf((double) metric.getProduceLatency() / 1_000_000.0))
           .append("\n");
     } catch (IOException e) {
       e.printStackTrace();
