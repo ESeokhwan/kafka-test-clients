@@ -24,15 +24,11 @@ import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
 
 @Slf4j
-public class NaiveMetricExporter implements Runnable {
+public class NaiveProducerMetricExporter implements Runnable {
 
   @Getter
   @Parameters(index = "0", description = "Path of produce request data file")
   private String produceFilePath;
-
-  @Getter
-  @Parameters(index = "1", description = "Path of consume request data file")
-  private String consumeFilePath;
 
   @Getter
   @Option(names = {"-o", "--output"}, description = "Path of monitoring output file. Default: monitored_stat.csv")
@@ -40,11 +36,9 @@ public class NaiveMetricExporter implements Runnable {
 
   private IMonitorLogReadStrategy producerMonitorLogReadStrategy;
 
-  private IMonitorLogReadStrategy consumerMonitorLogReadStrategy;
-
   private IMessageMetricWriteStrategy metricWriteStrategy;
 
-  public NaiveMetricExporter() {
+  public NaiveProducerMetricExporter() {
     super();
   }
 
@@ -53,7 +47,7 @@ public class NaiveMetricExporter implements Runnable {
     String pid = rt.getName();
     ThreadContext.put("PID", pid);
 
-    new CommandLine((new NaiveMetricExporter()))
+    new CommandLine((new NaiveProducerMetricExporter()))
         .execute(args);
 
     log.info("DONE");
@@ -62,28 +56,14 @@ public class NaiveMetricExporter implements Runnable {
   @Override
   public void run() {
     producerMonitorLogReadStrategy = new MonitorLogReadStrategy(produceFilePath);
-    consumerMonitorLogReadStrategy = new MonitorLogReadStrategy(consumeFilePath);
     metricWriteStrategy = new CsvMessageMetricWriteStrategy(outputFilePath);
 
     List<MonitorLog> pLogs = getMonitorLogs(producerMonitorLogReadStrategy);
-    List<MonitorLog> cLogs = getMonitorLogs(consumerMonitorLogReadStrategy);
 
     HashMap<String, MonitorLog> pLogsMap = new HashMap<>();
     pLogs.stream().forEach(e -> pLogsMap.put(generateKey(e), e));
 
     List<MessageMetric> output = new ArrayList<>();
-    for (MonitorLog cLog: cLogs) {
-      MonitorLog pRequestedLog = pLogsMap.remove(pRequestedKey(cLog));
-      MonitorLog pRespondedLog = pLogsMap.remove(pRespondedKey(cLog));
-
-      output.add(new MessageMetric(
-          cLog.getMessageId(), 
-          pRequestedLog != null ? pRequestedLog.getTimestamp() : 0,
-          pRespondedLog != null ? pRespondedLog.getTimestamp() : 0,
-          cLog != null ? cLog.getTimestamp() : 0
-      ));
-    }
-
     List<MonitorLog> pLogMapValuesCopy = new ArrayList<>(pLogsMap.values());
     for (MonitorLog pLog: pLogMapValuesCopy) {
       String curKey = generateKey(pLog);
@@ -111,6 +91,7 @@ public class NaiveMetricExporter implements Runnable {
         continue;
       }
     }
+
 
     Collections.sort(output, Comparator.comparingLong(MessageMetric::getProduceRequestedAt));
     // write output
