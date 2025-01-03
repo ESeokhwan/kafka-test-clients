@@ -16,6 +16,8 @@ import org.example.monitor.MonitorLog;
 import org.example.monitor.MonitorQueue;
 import org.example.monitor.writer.CsvMonitorLogWriteStrategy;
 import org.example.monitor.writer.MonitorLogWriter;
+import org.example.util.MessageGenerator;
+import org.example.util.IMessageGenerator;
 
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
@@ -33,6 +35,10 @@ public class BasicConsumerWithMonitor implements Runnable {
   private String[] topics;
 
   @Getter
+  @Option(names = {"-s", "--record-size"}, description = "Size of a single record(byte)")
+  private int messageSize = 1000;
+
+  @Getter
   @Option(names = {"-t", "--runtime"}, description = "Total runtime(sec) of this consumer. It will run eternally, when this value is set 0. Default: 1800 sec")
   private long totalRuntime = 30 * 60;
 
@@ -44,9 +50,13 @@ public class BasicConsumerWithMonitor implements Runnable {
   @Option(names = {"-b", "--monitor-batch-size"}, description = "write batch size of monitor log")
   private int monitorBatchSize = 10_000;
 
-  private final MonitorQueue monitoringQueue = MonitorQueue.getInstance();  
+  private final MonitorQueue monitoringQueue = MonitorQueue.getInstance();
 
   private MonitorLogWriter monitorLogWriter;
+
+  private IMessageGenerator messageGenerator;
+
+  private long absTimestampBase;
 
   public BasicConsumerWithMonitor() {
     super();
@@ -54,6 +64,8 @@ public class BasicConsumerWithMonitor implements Runnable {
 
   @Override
   public void run() {
+    absTimestampBase = System.currentTimeMillis() * 1_000_000 - System.nanoTime();
+
     Properties props = createConsumerConfig();
     Thread monitorLogWriterThread = setupMonitorLogWriterThread();
     monitorLogWriterThread.start();
@@ -64,11 +76,11 @@ public class BasicConsumerWithMonitor implements Runnable {
       long expiredTime = System.nanoTime() + totalRuntime * 1000 * 1000 * 1000;
       while (totalRuntime == 0 || System.nanoTime() < expiredTime) {
         ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
-        long curNanoTime = System.nanoTime();
+        long curTime = System.nanoTime() + absTimestampBase;
         log.info("fetch {} records.", records.count());
         for (var record: records) {
           log.trace("offset = {}, key = {}, value = {}", record.offset(), record.key(), record.value());
-          monitoringQueue.enqueue(new MonitorLog(MonitorLog.RequestType.CONSUME, record.value(), curNanoTime, MonitorLog.State.RESPONDED));
+          monitoringQueue.enqueue(new MonitorLog(MonitorLog.RequestType.CONSUME, record.value(), curTime, MonitorLog.State.RESPONDED));
           monitorLogWriter.notifyIfNeeded();
         }
       }
@@ -97,8 +109,10 @@ public class BasicConsumerWithMonitor implements Runnable {
   }
 
   private Thread setupMonitorLogWriterThread() {
+    messageGenerator = new MessageGenerator(messageSize, 100);
     monitorLogWriter = new MonitorLogWriter(
         new CsvMonitorLogWriteStrategy(monitorFilePath),
+        messageGenerator,
         monitorBatchSize
     );
     return new Thread(monitorLogWriter);

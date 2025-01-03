@@ -18,6 +18,8 @@ import org.example.monitor.MonitorLog;
 import org.example.monitor.MonitorQueue;
 import org.example.monitor.writer.CsvMonitorLogWriteStrategy;
 import org.example.monitor.writer.MonitorLogWriter;
+import org.example.util.MessageGenerator;
+import org.example.util.IMessageGenerator;
 
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
@@ -39,8 +41,12 @@ public class BasicProducerWithMonitor implements Runnable {
   private String producerKey = "BasicProducer";
 
   @Getter
-  @Option(names = {"-s", "--size"}, description = "end Page Num")
-  private int dataSize = 100_000;
+  @Option(names = {"-n", "--num-record"}, description = "The number of records")
+  private int numRecord = 100_000;
+
+  @Getter
+  @Option(names = {"-s", "--record-size"}, description = "Size of a single record(byte)")
+  private int messageSize = 1000;
 
   @Getter
   @Option(names = {"-m", "--monitor-file"}, description = "path of monitoring output file")
@@ -55,6 +61,10 @@ public class BasicProducerWithMonitor implements Runnable {
   private MonitorLogWriter monitorLogWriter;
 
   private AtomicInteger ackCounter = new AtomicInteger();
+
+  private IMessageGenerator messageGenerator;
+
+  private long absTimestampBase;
 
   public BasicProducerWithMonitor() {
     super();
@@ -77,18 +87,21 @@ public class BasicProducerWithMonitor implements Runnable {
       log.error("producerKey should not contain '-'");
       return;
     }
+    absTimestampBase = System.currentTimeMillis() * 1_000_000 - System.nanoTime();
 
     Properties props = createProducerConfig();
     Thread monitorLogWriteThread = setupMonitorLogWriterThread();
 
-    ackCounter.set(dataSize);
+    ackCounter.set(numRecord);
     monitorLogWriteThread.start();
 
     try (Producer<String, String> producer = new KafkaProducer<>(props)) {
-      for (int i = 0; i < dataSize; i++) {
+      for (int i = 0; i < numRecord; i++) {
         String messageId = this.producerKey + "-" + String.valueOf(i + 1);
-        ProducerRecord<String, String> record = new ProducerRecord<>(topicName, messageId);
-        long requestedTime = System.nanoTime();
+        String message = messageGenerator.generate(messageId);
+        
+        ProducerRecord<String, String> record = new ProducerRecord<>(topicName, message);
+        long requestedTime = System.nanoTime() + absTimestampBase;
         producer.send(record, new BasicProducerCallback(record));
         monitoringQueue.enqueue(new MonitorLog(
             MonitorLog.RequestType.PRODUCE, 
@@ -119,8 +132,10 @@ public class BasicProducerWithMonitor implements Runnable {
   }
 
   private Thread setupMonitorLogWriterThread() {
+    messageGenerator = new MessageGenerator(messageSize, 100_000);
     monitorLogWriter = new MonitorLogWriter(
         new CsvMonitorLogWriteStrategy(monitorFilePath),
+        messageGenerator,
         monitorBatchSize
     );
     return new Thread(monitorLogWriter);
@@ -140,7 +155,7 @@ public class BasicProducerWithMonitor implements Runnable {
         exception.printStackTrace();
         return;
       }
-      long respondedTime = System.nanoTime();
+      long respondedTime = System.nanoTime() + absTimestampBase;
 
       String messageId = record.value();
       monitoringQueue.enqueue(new MonitorLog(

@@ -42,6 +42,10 @@ public class MonitorLog {
     return state;
   }
 
+  public MonitorLog withMessageId(String messageId) {
+    return new MonitorLog(type, messageId, timestamp, state);
+  }
+
   @Override
   public int hashCode() {
     return Objects.hash(type, messageId, state);

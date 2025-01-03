@@ -2,6 +2,7 @@ package org.example.monitor.writer;
 
 import org.example.monitor.MonitorLog;
 import org.example.monitor.MonitorQueue;
+import org.example.util.IMessageGenerator;
 
 // TODO: 일정 시간동안 monitorQueue에 있는 데이터가 flush안되면 자동으로 flush해주는 기능 추가하기
 public class MonitorLogWriter implements Runnable {
@@ -9,6 +10,8 @@ public class MonitorLogWriter implements Runnable {
   private final MonitorQueue monitorQueue = MonitorQueue.getInstance();
   
   private final IMonitorLogWriteStrategy writeStrategy;
+
+  private final IMessageGenerator messageGenerator;
   
   private final int batchSize;
 
@@ -16,8 +19,9 @@ public class MonitorLogWriter implements Runnable {
 
   private int curWrittenCnt = 0;
 
-  public MonitorLogWriter(IMonitorLogWriteStrategy writeStrategy, int batchSize) {
+  public MonitorLogWriter(IMonitorLogWriteStrategy writeStrategy, IMessageGenerator messageGenerator, int batchSize) {
     this.writeStrategy = writeStrategy;
+    this.messageGenerator = messageGenerator;
     this.batchSize = batchSize;
   }
 
@@ -54,7 +58,8 @@ public class MonitorLogWriter implements Runnable {
         syncedWait();
       }
       MonitorLog log = monitorQueue.dequeue();
-      writeStrategy.write(log);
+      String messageId = messageGenerator.extractMessageId(log.getMessageId());
+      writeStrategy.write(log.withMessageId(messageId));
       curWrittenCnt += 1;
       tryFlushBatch();
     }
