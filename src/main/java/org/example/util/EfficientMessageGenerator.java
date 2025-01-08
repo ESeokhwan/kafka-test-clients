@@ -27,7 +27,7 @@ public class EfficientMessageGenerator extends NaiveMessageGenerator {
     while (curUnitSize > 0) {
       StringBuilder builder = new StringBuilder(curUnitSize);
       for (int i = 0; i < curUnitSize; i++) {
-        builder.append(paddingCharacters.indexOf(random.nextInt()));
+        builder.append(paddingCharacters.charAt(random.nextInt(paddingCharacters.length())));
       }
       paddingUnits.add(builder.toString());
       curUnitSize /= UNIT_DOWNGRADE_FACTOR;
@@ -45,6 +45,7 @@ public class EfficientMessageGenerator extends NaiveMessageGenerator {
         builder.append(paddingUnits.get(curPaddingUnitIdx));
         size -= curUnitSize;
       }
+      curPaddingUnitIdx += 1;
       curUnitSize /= UNIT_DOWNGRADE_FACTOR;
     }
 
