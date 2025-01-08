@@ -1,6 +1,6 @@
 package org.example.util;
 
-public interface IMessageGenerator {
+public interface IMessageAdaptor {
   String generate(String messageId);
 
   String extractMessageId(String message);

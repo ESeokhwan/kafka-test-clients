@@ -1,31 +1,42 @@
 package org.example.util;
 
-public abstract class NaiveMessageGenerator implements IMessageGenerator {
+import java.util.Random;
 
-  private final static char divChar = '!';
+public class NaiveMessageGenerator extends NaiveMessageAdaptor {
 
-  protected final int messageSize;
+  private final static String paddingCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-  protected NaiveMessageGenerator(int messageSize) {
-    this.messageSize = messageSize;
+  private int[] preGeneratedIndices;
+
+  private int curIdx;
+
+  public NaiveMessageGenerator(int messageSize, int preIndicesSize) {
+    super(messageSize);
+    init(preIndicesSize);
   }
 
-  abstract String getRandomPadding(int paddingSize);
+  private void init(int preIndicesSize) {
+    Random random = new Random();
+    preGeneratedIndices = new int[preIndicesSize];
+    curIdx = 0;
 
-  @Override
-  public String generate(String messageId) {
-    int paddingSize = messageSize - messageId.length() - 1;
-    String padding = getRandomPadding(paddingSize);
-    return messageId + divChar + padding;
+    for (int i = 0; i < preGeneratedIndices.length; i++) {
+      preGeneratedIndices[i] = random.nextInt(paddingCharacters.length());
+    }
   }
 
   @Override
-  public String extractMessageId(String message) {
-    int messageIdSize = message.lastIndexOf(divChar);
-    if (messageIdSize < 0) {
-      messageIdSize = message.length();
+  protected String getRandomPadding(int size) {
+    StringBuilder paddedString = new StringBuilder();
+    for (int i = 0; i < size; i++) {
+      if (curIdx >= preGeneratedIndices.length) {
+        curIdx = 0;
+      }
+      char randomChar = paddingCharacters.charAt(preGeneratedIndices[curIdx]);
+      paddedString.append(randomChar);
+      curIdx += 1;
     }
 
-    return message.substring(0, messageIdSize);
+    return paddedString.toString();
   }
 }

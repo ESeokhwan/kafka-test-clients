@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
-public class EfficientMessageGenerator extends NaiveMessageGenerator {
+public class EfficientMessageGenerator extends NaiveMessageAdaptor {
 
   private final static String paddingCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 

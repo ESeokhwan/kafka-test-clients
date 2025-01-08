@@ -19,7 +19,7 @@ import org.example.monitor.MonitorQueue;
 import org.example.monitor.writer.CsvMonitorLogWriteStrategy;
 import org.example.monitor.writer.MonitorLogWriter;
 import org.example.util.EfficientMessageGenerator;
-import org.example.util.IMessageGenerator;
+import org.example.util.IMessageAdaptor;
 
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
@@ -62,7 +62,7 @@ public class BasicProducerWithMonitor implements Runnable {
 
   private AtomicInteger ackCounter = new AtomicInteger();
 
-  private IMessageGenerator messageGenerator;
+  private IMessageAdaptor messageGenerator;
 
   private long absTimestampBase;
 

@@ -5,10 +5,8 @@ import java.lang.management.RuntimeMXBean;
 import java.time.Duration;
 import java.util.List;
 import java.util.Properties;
-
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.logging.log4j.ThreadContext;
@@ -16,9 +14,8 @@ import org.example.monitor.MonitorLog;
 import org.example.monitor.MonitorQueue;
 import org.example.monitor.writer.CsvMonitorLogWriteStrategy;
 import org.example.monitor.writer.MonitorLogWriter;
-import org.example.util.MessageGenerator;
-import org.example.util.IMessageGenerator;
-
+import org.example.util.ExtractOnlyNaiveMessageAdaptor;
+import org.example.util.IMessageAdaptor;
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
@@ -54,7 +51,7 @@ public class BasicConsumerWithMonitor implements Runnable {
 
   private MonitorLogWriter monitorLogWriter;
 
-  private IMessageGenerator messageGenerator;
+  private IMessageAdaptor messageAdaptor;
 
   private long absTimestampBase;
 
@@ -109,10 +106,10 @@ public class BasicConsumerWithMonitor implements Runnable {
   }
 
   private Thread setupMonitorLogWriterThread() {
-    messageGenerator = new MessageGenerator(messageSize, 100);
+    messageAdaptor = new ExtractOnlyNaiveMessageAdaptor(messageSize);
     monitorLogWriter = new MonitorLogWriter(
         new CsvMonitorLogWriteStrategy(monitorFilePath),
-        messageGenerator,
+        messageAdaptor,
         monitorBatchSize
     );
     return new Thread(monitorLogWriter);
