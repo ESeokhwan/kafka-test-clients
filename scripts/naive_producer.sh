@@ -13,7 +13,7 @@ OUTPUT_DIR=""
 OUTPUT_SUFFIX=""
 
 # Add options for configuration file path and to control page cache clearing
-while getopts c:j:t:b:s:n:d:f flag
+while getopts c:j:t:b:s:n:d:f: flag
 do
     case "${flag}" in
         c) CONFIG_FILE=${OPTARG};;    # Configuration file path

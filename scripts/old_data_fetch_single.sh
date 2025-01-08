@@ -15,7 +15,7 @@ OUTPUT_SUFFIX=""
 CLEAR_CACHE="true"  # Default is to enable page cache clearing
 
 # Add options for configuration file path and to control page cache clearing
-while getopts c:j:l:t:b:s:n:d:f:x flag
+while getopts c:j:l:t:b:s:n:d:f:x: flag
 do
     case "${flag}" in
         c) CONFIG_FILE=${OPTARG};;    # Configuration file path
@@ -52,7 +52,9 @@ MESSAGE_SIZE=${MESSAGE_SIZE:-$(read_yaml_value "message_size")}
 MESSAGE_COUNT=${MESSAGE_COUNT:-$(read_yaml_value "message_count")}
 OUTPUT_DIR=${OUTPUT_DIR:-$(read_yaml_value "output_dir")}
 OUTPUT_SUFFIX=${OUTPUT_SUFFIX:-$(read_yaml_value "output_suffix")}
-CLEAR_CACHE=${CLEAR_CACHE:-$(read_yaml_value "clear_cache")}
+if [ -z "$CLEAR_CACHE" ] || [ "$CLEAR_CACHE" == "true" ]; then
+    CLEAR_CACHE=$(read_yaml_value "clear_cache")
+fi
 
 # Validation
 if [ -z "$JAR_FILE" ] || [ -z "$LOG_FILE" ] || [ -z "$TOPIC" ] || [ -z "$BROKER" ] || [ -z "$MESSAGE_SIZE" ] || [ -z "$MESSAGE_COUNT" ] || [ -z "$OUTPUT_DIR" ] || [ -z "$OUTPUT_SUFFIX" ]; then
@@ -84,3 +86,4 @@ echo "Running Java Kafka consumer..."
 java -cp "$JAR_FILE" org.example.EarliestConsumerWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -n "$MESSAGE_COUNT" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
 
 echo "Execution completed."
+
