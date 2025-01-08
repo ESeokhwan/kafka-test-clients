@@ -18,7 +18,7 @@ import org.example.monitor.MonitorLog;
 import org.example.monitor.MonitorQueue;
 import org.example.monitor.writer.CsvMonitorLogWriteStrategy;
 import org.example.monitor.writer.MonitorLogWriter;
-import org.example.util.MessageGenerator;
+import org.example.util.EfficientMessageGenerator;
 import org.example.util.IMessageGenerator;
 
 import picocli.CommandLine;
@@ -132,7 +132,7 @@ public class BasicProducerWithMonitor implements Runnable {
   }
 
   private Thread setupMonitorLogWriterThread() {
-    messageGenerator = new MessageGenerator(messageSize, 100_000);
+    messageGenerator = new EfficientMessageGenerator(messageSize, 100_000);
     monitorLogWriter = new MonitorLogWriter(
         new CsvMonitorLogWriteStrategy(monitorFilePath),
         messageGenerator,
