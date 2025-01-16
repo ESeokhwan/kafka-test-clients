@@ -2,6 +2,7 @@
 
 # Default configuration file path
 CONFIG_FILE="config.yaml"
+PID_DIR="/tmp/vmtouch_pids"
 
 # Initial variables
 JAR_FILE=""
@@ -71,33 +72,49 @@ if [ ! -d "$OUTPUT_DIR" ]; then
     mkdir -p "$OUTPUT_DIR"
 fi
 
-# Page cache clearing function
-clear_page_cache() {
+mkdir -p "$PID_DIR"
+TIMESTAMP=$(date +%s)
+PID_FILE="$PID_DIR/vmtouch_$TIMESTAMP.pid"
+
+# Page cache setup function
+setup_page_cache() {
     if [[ "$CLEAR_CACHE" == "true" ]]; then
         echo "Removing old records from page cache using vmtouch..."
         vmtouch -e "$LOG_FILE"
     else
-        echo "Skipping page cache removal as per configuration."
+        vmtouch -tld "$LOG_FILE" & echo $! > "$PID_FILE"
+        echo "Loading old records to page cache using vmtouch (PID: $(cat $PID_FILE))..."
     fi
 }
 
+cleanup_vmtouch() {
+  if [ -e "$PID_FILE" ]; then
+    kill -9 $(cat "$PID_FILE") && rm -f "$PID_FILE"
+    echo "Stopped lock on file using vmtouch."
+  else
+    echo "No running vmtouch process found."
+  fi
+}
+
 # Execute
-clear_page_cache
+setup_page_cache
 
 # First Java command execution
 echo "Running Java Kafka consumer..."
 java -cp "$JAR_FILE" org.example.EarliestConsumerWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -n "$MESSAGE_COUNT" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}_1.csv"
 
+cleanup_vmtouch
 echo "First execution completed."
 
 # Sleep
 echo "Sleeping for $INTERVAL ms"
 usleep $(($INTERVAL * 1000))  # Convert milliseconds to microseconds
 
-clear_page_cache
+setup_page_cache
 
 # Second Java command execution
 echo "Running Java Kafka consumer..."
 java -cp "$JAR_FILE" org.example.EarliestConsumerWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -n "$MESSAGE_COUNT" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}_2.csv"
 
+cleanup_vmtouch
 echo "Second execution completed."
