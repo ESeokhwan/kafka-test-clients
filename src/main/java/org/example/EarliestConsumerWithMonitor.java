@@ -83,7 +83,7 @@ public class EarliestConsumerWithMonitor implements Runnable {
       while (totalRuntime == 0 || System.nanoTime() < expiredTime) {
         ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
         long curTime = System.nanoTime() + absTimestampBase;
-        log.info("fetch {} records.", records.count());
+        log.debug("fetch {} records.", records.count());
         for (var record: records) {
           log.trace("offset = {}, key = {}, value = {}", record.offset(), record.key(), record.value());
           monitoringQueue.enqueue(new MonitorLog(MonitorLog.RequestType.CONSUME, record.value(), curTime, MonitorLog.State.RESPONDED));
