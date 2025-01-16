@@ -80,12 +80,13 @@ setup_page_cache() {
         vmtouch -e "$LOG_FILE"
     else
         vmtouch -tld "$LOG_FILE" -P "$PID_FILE"
-        echo "Loading old records to page cache using vmtouch (PID: $(cat $PID_FILE))..."
+        echo "Loading old records to page cache using vmtouch..."
     fi
 }
 
 cleanup_vmtouch() {
   if [ -e "$PID_FILE" ]; then
+    echo "kill vmtouch process(PID: $(cat $PID_FILE))..."
     kill -9 $(cat "$PID_FILE")
     echo "Stopped lock on file using vmtouch."
   else
