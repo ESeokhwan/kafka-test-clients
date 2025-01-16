@@ -74,7 +74,8 @@ fi
 
 mkdir -p "$PID_DIR"
 TIMESTAMP=$(date +%s)
-PID_FILE="$PID_DIR/vmtouch_$TIMESTAMP.pid"
+SCRIPT_PID=$$
+PID_FILE="$PID_DIR/vmtouch_${TIMESTAMP}_${SCRIPT_PID}.pid"
 
 # Page cache setup function
 setup_page_cache() {
