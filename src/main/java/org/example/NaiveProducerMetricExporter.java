@@ -112,10 +112,10 @@ public class NaiveProducerMetricExporter implements Runnable {
   }
 
   private String pRequestedKey(MonitorLog log) {
-    return log.getMessageId() + "-" + MonitorLog.RequestType.PRODUCE + "-" + MonitorLog.State.REQUESTED;
+    return log.getMessageId() + "-" + log.getType() + "-" + MonitorLog.State.REQUESTED;
   }
 
   private String pRespondedKey(MonitorLog log) {
-    return log.getMessageId() + "-" + MonitorLog.RequestType.PRODUCE + "-" + MonitorLog.State.RESPONDED;
+    return log.getMessageId() + "-" + log.getType() + "-" + MonitorLog.State.RESPONDED;
   }
 }
