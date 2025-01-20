@@ -64,7 +64,8 @@ public class FileReadChecker implements Runnable {
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
+    log.info("file path: " + filePath + ", size: " + size);
     log.info("Start Time: " + new Date((startTime + timeDiff) / 1_000_000) + ", End Time: " + new Date((endTime + timeDiff) / 1_000_000));
-    log.info("transfer Time: " + ((endTime - startTime) / 1_000_000) + "ns");
+    log.info("transfer Time: " + ((endTime - startTime)) + "ns");
   }
 }
