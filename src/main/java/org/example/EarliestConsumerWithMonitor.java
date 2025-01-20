@@ -14,6 +14,8 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.logging.log4j.ThreadContext;
 import org.example.monitor.MonitorLog;
+import org.example.monitor.MonitorLog.RequestType;
+import org.example.monitor.MonitorLog.State;
 import org.example.monitor.MonitorQueue;
 import org.example.monitor.writer.CsvMonitorLogWriteStrategy;
 import org.example.monitor.writer.MonitorLogWriter;
@@ -81,13 +83,13 @@ public class EarliestConsumerWithMonitor implements Runnable {
       int consumeCnt = 0;
       long expiredTime = System.nanoTime() + totalRuntime * 1000 * 1000 * 1000;
       while (totalRuntime == 0 || System.nanoTime() < expiredTime) {
+        monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, "fetch-" + consumeCnt, System.nanoTime() + absTimestampBase, State.REQUESTED));
         ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
-        long curTime = System.nanoTime() + absTimestampBase;
+        monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, "fetch-" + consumeCnt, System.nanoTime() + absTimestampBase, State.REQUESTED));
+        monitorLogWriter.notifyIfNeeded();
         log.debug("fetch {} records.", records.count());
         for (var record: records) {
           log.trace("offset = {}, key = {}, value = {}", record.offset(), record.key(), record.value());
-          monitoringQueue.enqueue(new MonitorLog(MonitorLog.RequestType.CONSUME, record.value(), curTime, MonitorLog.State.RESPONDED));
-          monitorLogWriter.notifyIfNeeded();
           consumeCnt += 1;
         }
 
