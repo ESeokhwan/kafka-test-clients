@@ -59,13 +59,13 @@ public class FileReadChecker implements Runnable {
           StandardOpenOption.READ
       );
       startTime = System.nanoTime();
-      devNullChannel.transferFrom(fileChannel, 0, size);
+      fileChannel.transferTo(0, size, devNullChannel);
       endTime = System.nanoTime();
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
     log.info("file path: " + filePath + ", size: " + size);
     log.info("Start Time: " + new Date((startTime + timeDiff) / 1_000_000) + ", End Time: " + new Date((endTime + timeDiff) / 1_000_000));
-    log.info("transfer Time: " + ((endTime - startTime)) + "ns");
+    log.info("transfer Time: " + (((double) (endTime - startTime)) / 1000000.0) + "ms");
   }
 }
