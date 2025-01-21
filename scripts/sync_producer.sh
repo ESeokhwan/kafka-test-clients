@@ -74,7 +74,7 @@ if [[ "$WITH_EXPORT" == "true" ]]; then
     sleep 5
 
     echo "Export log to metric file..."
-    java -cp "$JAR_FILE" org.example.NaiveProducerMetricExporter "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv" -o "${OUTPUT_DIR}/${OUTPUT_SUFFIX}_exported.csv"
+    java -cp "$JAR_FILE" org.example.BasicMetricExporter "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv" -o "${OUTPUT_DIR}/${OUTPUT_SUFFIX}_exported.csv"
     echo "Export job done."
 fi
 
