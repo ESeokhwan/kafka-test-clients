@@ -127,6 +127,7 @@ public class BasicProducerWithMonitor implements Runnable {
     props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
     props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
     props.put("client.id", "basic-producer-with-monitor");
+    props.put("batch.size", "0");
 
     return props;
   }
