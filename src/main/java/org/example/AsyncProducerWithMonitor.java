@@ -26,7 +26,7 @@ import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
 
 @Slf4j
-public class BasicProducerWithMonitor implements Runnable {
+public class AsyncProducerWithMonitor implements Runnable {
 
   @Getter
   @Parameters(index = "0", description = "Kafka Brokers")
@@ -66,7 +66,7 @@ public class BasicProducerWithMonitor implements Runnable {
 
   private long absTimestampBase;
 
-  public BasicProducerWithMonitor() {
+  public AsyncProducerWithMonitor() {
     super();
   }
 
@@ -75,7 +75,7 @@ public class BasicProducerWithMonitor implements Runnable {
     String pid = rt.getName();
     ThreadContext.put("PID", pid);
 
-    new CommandLine((new BasicProducerWithMonitor()))
+    new CommandLine((new AsyncProducerWithMonitor()))
         .execute(args);
 
     log.info("DONE");
