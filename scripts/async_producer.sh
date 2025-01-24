@@ -49,7 +49,7 @@ MESSAGE_SIZE=${MESSAGE_SIZE:-$(read_yaml_value "message_size")}
 MESSAGE_COUNT=${MESSAGE_COUNT:-$(read_yaml_value "message_count")}
 OUTPUT_DIR=${OUTPUT_DIR:-$(read_yaml_value "output_dir")}
 OUTPUT_SUFFIX=${OUTPUT_SUFFIX:-$(read_yaml_value "output_suffix")}
-if [ -z "$WITH_EXPORT" ] || [ "$WITH_EXPORT" == "false" ]; then
+if [ "$WITH_EXPORT" == "false" ]; then
     WITH_EXPORT=$(read_yaml_value "with_export")
 fi
 
