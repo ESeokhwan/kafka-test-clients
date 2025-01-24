@@ -49,7 +49,7 @@ TOPIC=${TOPIC:-$(read_yaml_value "topic")}
 BROKER=${BROKER:-$(read_yaml_value "broker")}
 MESSAGE_SIZE=${MESSAGE_SIZE:-$(read_yaml_value "message_size")}
 MESSAGE_COUNT=${MESSAGE_COUNT:-$(read_yaml_value "message_count")}
-REFRESH_INTERVAL=${MESSAGE_COUNT:-$(read_yaml_value "refresh_interval")}
+REFRESH_INTERVAL=${REFRESH_INTERVAL:-$(read_yaml_value "refresh_interval")}
 OUTPUT_DIR=${OUTPUT_DIR:-$(read_yaml_value "output_dir")}
 OUTPUT_SUFFIX=${OUTPUT_SUFFIX:-$(read_yaml_value "output_suffix")}
 if [ "$WITH_EXPORT" == "false" ]; then
