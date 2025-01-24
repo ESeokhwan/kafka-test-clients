@@ -3,6 +3,7 @@ package org.example;
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
@@ -12,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.logging.log4j.ThreadContext;
 import org.example.monitor.MonitorLog;
 import org.example.monitor.MonitorLog.RequestType;
@@ -50,6 +52,15 @@ public class EarliestConsumerWithMonitor implements Runnable {
   private int numRecord = 100_000;
 
   @Getter
+  @Option(
+      names = {"-r", "--refresh-interval"},
+      description = "Offset Reset interval. This value is not exact refresh interval, "
+          + "offset refresh is occurred when number of fetched data from last offset reset has exceeded this value. "
+          + "It will never reset offset, when this value is set 0. Default: 0"
+  )
+  private int refreshInterval = 0;
+
+  @Getter
   @Option(names = {"-m", "--monitor-file"}, description = "path of monitoring output file")
   private String monitorFilePath = "output/consumer_monitor_earliest.csv";
 
@@ -81,8 +92,13 @@ public class EarliestConsumerWithMonitor implements Runnable {
       consumer.subscribe(List.of(topics));
 
       int consumeCnt = 0;
+      int intervalConsumeCnt = 0;
       long expiredTime = System.nanoTime() + totalRuntime * 1000 * 1000 * 1000;
       while (totalRuntime == 0 || System.nanoTime() < expiredTime) {
+        if (refreshInterval > 0 && intervalConsumeCnt > refreshInterval) {
+          consumer.seekToBeginning(Arrays.stream(topics).map(topic -> new TopicPartition(topic, 0)).toList());
+          intervalConsumeCnt = 0;
+        }
         monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, "fetch-" + consumeCnt, System.nanoTime() + absTimestampBase, State.REQUESTED));
         ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
         monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, "fetch-" + consumeCnt, System.nanoTime() + absTimestampBase, State.RESPONDED));
@@ -91,6 +107,7 @@ public class EarliestConsumerWithMonitor implements Runnable {
         for (var record: records) {
           log.trace("offset = {}, key = {}, value = {}", record.offset(), record.key(), record.value());
           consumeCnt += 1;
+          intervalConsumeCnt += 1;
         }
 
         if (consumeCnt >= numRecord) {

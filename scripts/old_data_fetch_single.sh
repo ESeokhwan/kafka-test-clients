@@ -9,12 +9,13 @@ TOPIC=""
 BROKER=""
 MESSAGE_SIZE=""
 MESSAGE_COUNT=""
+REFRESH_INTERVAL=""
 OUTPUT_DIR=""
 OUTPUT_SUFFIX=""
 WITH_EXPORT="false" # Default is to disable export
 
 # Add options for configuration file path and to control page cache clearing
-while getopts c:j:t:b:s:n:d:f:e: flag
+while getopts c:j:t:b:s:n:r:d:f:e: flag
 do
     case "${flag}" in
         c) CONFIG_FILE=${OPTARG};;    # Configuration file path
@@ -23,6 +24,7 @@ do
         b) BROKER=${OPTARG};;         # Kafka Broker
         s) MESSAGE_SIZE=${OPTARG};;   # Message size
         n) MESSAGE_COUNT=${OPTARG};;  # Number of messages
+        r) REFRESH_INTERVAL=${OPTARG};; # Refresh offset interval
         d) OUTPUT_DIR=${OPTARG};;     # Output directory
         f) OUTPUT_SUFFIX=${OPTARG};;  # Output file suffix
         e) WITH_EXPORT="true";;
@@ -47,6 +49,7 @@ TOPIC=${TOPIC:-$(read_yaml_value "topic")}
 BROKER=${BROKER:-$(read_yaml_value "broker")}
 MESSAGE_SIZE=${MESSAGE_SIZE:-$(read_yaml_value "message_size")}
 MESSAGE_COUNT=${MESSAGE_COUNT:-$(read_yaml_value "message_count")}
+REFRESH_INTERVAL=${MESSAGE_COUNT:-$(read_yaml_value "refresh_interval")}
 OUTPUT_DIR=${OUTPUT_DIR:-$(read_yaml_value "output_dir")}
 OUTPUT_SUFFIX=${OUTPUT_SUFFIX:-$(read_yaml_value "output_suffix")}
 if [ -z "$WITH_EXPORT" ] || [ "$WITH_EXPORT" == "false" ]; then
@@ -54,7 +57,7 @@ if [ -z "$WITH_EXPORT" ] || [ "$WITH_EXPORT" == "false" ]; then
 fi
 
 # Validation
-if [ -z "$JAR_FILE" ] || [ -z "$TOPIC" ] || [ -z "$BROKER" ] || [ -z "$MESSAGE_SIZE" ] || [ -z "$MESSAGE_COUNT" ] || [ -z "$OUTPUT_DIR" ] || [ -z "$OUTPUT_SUFFIX" ]; then
+if [ -z "$JAR_FILE" ] || [ -z "$TOPIC" ] || [ -z "$BROKER" ] || [ -z "$MESSAGE_SIZE" ] || [ -z "$MESSAGE_COUNT" ] || [ -z "$REFRESH_INTERVAL" ] || [ -z "$OUTPUT_DIR" ] || [ -z "$OUTPUT_SUFFIX" ]; then
     echo "Error: Missing required configuration values."
     exit 1
 fi
@@ -67,7 +70,7 @@ fi
 
 # Java command execution
 echo "Running Java Kafka consumer..."
-java -cp "$JAR_FILE" org.example.EarliestConsumerWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -n "$MESSAGE_COUNT" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
+java -cp "$JAR_FILE" org.example.EarliestConsumerWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -n "$MESSAGE_COUNT" -r "$REFRESH_INTERVAL" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
 
 if [[ "$WITH_EXPORT" == "true" ]]; then
     echo "Sleep a 5s..."
