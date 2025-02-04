@@ -23,7 +23,7 @@ do
         t) TOPIC=${OPTARG};;          # Kafka Topic
         b) BROKER=${OPTARG};;         # Kafka Broker
         s) MESSAGE_SIZE=${OPTARG};;   # Message size
-        p) partition_count=${OPTARG};; # Number of partitions
+        p) PARTITION_COUNT=${OPTARG};; # Number of partitions
         n) MESSAGE_COUNT=${OPTARG};;  # Number of messages
         d) OUTPUT_DIR=${OPTARG};;     # Output directory
         f) OUTPUT_SUFFIX=${OPTARG};;  # Output file suffix
