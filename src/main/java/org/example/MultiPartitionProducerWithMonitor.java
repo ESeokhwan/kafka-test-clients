@@ -100,7 +100,7 @@ public class MultiPartitionProducerWithMonitor implements Runnable {
           String messageId = this.producerKey + "-" + j + "-" + String.valueOf(i + 1);
           String message = messageGenerator.generate(messageId);
 
-          ProducerRecord<String, String> record = new ProducerRecord<>(topicName, message);
+          ProducerRecord<String, String> record = new ProducerRecord<>(topicName, j, messageId, message);
           long requestedTime = System.nanoTime() + absTimestampBase;
           producer.send(record, new BasicProducerCallback(record)).get();
           monitoringQueue.enqueue(new MonitorLog(
