@@ -69,7 +69,7 @@ if [ ! -d "$OUTPUT_DIR" ]; then
 fi
 
 echo "Running Java Kafka producer..."
-java -cp "$JAR_FILE" org.example.MultiPartitionProducerWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -p "$PARTITION_COUNT" -n "$MESSAGE_COUNT" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
+java -cp "$JAR_FILE" org.example.MultiPartitionProducerMultiThreadWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -p "$PARTITION_COUNT" -n "$MESSAGE_COUNT" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
 echo "Producer job done."
 
 if [[ "$WITH_EXPORT" == "true" ]]; then
