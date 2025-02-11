@@ -187,9 +187,6 @@ public class MultiPartitionProducerMultiThreadWithMonitor implements Runnable {
 
     @Override
     public void run() {
-      int totalNumRecord = numRecord * partitionCount;
-      ackCounter.set(totalNumRecord);
-
       try (Producer<String, String> producer = new KafkaProducer<>(props)) {
         for (int i = 0; i < numRecord; i++) {
           String messageId = producerKey + "-" + partitionNum + "-" + String.valueOf(i + 1);
