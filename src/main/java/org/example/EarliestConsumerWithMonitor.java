@@ -1,16 +1,7 @@
 package org.example;
 
-import java.lang.management.ManagementFactory;
-import java.lang.management.RuntimeMXBean;
-import java.time.Duration;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Properties;
-import java.util.UUID;
-
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.TopicPartition;
@@ -23,10 +14,17 @@ import org.example.monitor.writer.CsvMonitorLogWriteStrategy;
 import org.example.monitor.writer.MonitorLogWriter;
 import org.example.util.ExtractOnlyNaiveMessageAdaptor;
 import org.example.util.IMessageAdaptor;
-
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
+
+import java.lang.management.ManagementFactory;
+import java.lang.management.RuntimeMXBean;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Properties;
+import java.util.UUID;
 
 @Slf4j
 public class EarliestConsumerWithMonitor implements Runnable {
@@ -68,7 +66,7 @@ public class EarliestConsumerWithMonitor implements Runnable {
   @Option(names = {"-b", "--monitor-batch-size"}, description = "write batch size of monitor log")
   private int monitorBatchSize = 10_000;
 
-  private final MonitorQueue monitoringQueue = MonitorQueue.getInstance();  
+  private final MonitorQueue monitoringQueue = MonitorQueue.getInstance();
 
   private MonitorLogWriter monitorLogWriter;
 
@@ -99,15 +97,20 @@ public class EarliestConsumerWithMonitor implements Runnable {
           consumer.seekToBeginning(Arrays.stream(topics).map(topic -> new TopicPartition(topic, 0)).toList());
           intervalConsumeCnt = 0;
         }
-        monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, "fetch-" + consumeCnt, System.nanoTime() + absTimestampBase, State.REQUESTED));
+        long requestTime = System.nanoTime() + absTimestampBase;
         ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
-        monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, "fetch-" + consumeCnt, System.nanoTime() + absTimestampBase, State.RESPONDED));
+        long respondedTime = System.nanoTime() + absTimestampBase;
         monitorLogWriter.notifyIfNeeded();
         log.debug("fetch {} records.", records.count());
         for (var record: records) {
           log.trace("offset = {}, key = {}, value = {}", record.offset(), record.key(), record.value());
+          monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, record.value(), requestTime, State.REQUESTED));
           consumeCnt += 1;
           intervalConsumeCnt += 1;
+        }
+
+        for (var record: records) {
+          monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, record.value(), respondedTime, State.RESPONDED));
         }
 
         if (consumeCnt >= numRecord) {
