@@ -165,7 +165,6 @@ public class MultiThreadEarliestConsumerWithMonitor implements Runnable {
       try(KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props)) {
         consumer.assign(Arrays.stream(topics).map(t -> new TopicPartition(t, partitionNum)).toList());
 
-        int consumeCnt = 0;
         int intervalConsumeCnt = 0;
         int partedRefreshInterval = refreshInterval / partitionCnt;
         long expiredTime = System.nanoTime() + totalRuntime * 1000 * 1000 * 1000;
@@ -174,20 +173,24 @@ public class MultiThreadEarliestConsumerWithMonitor implements Runnable {
             consumer.seekToBeginning(Arrays.stream(topics).map(topic -> new TopicPartition(topic, partitionNum)).toList());
             intervalConsumeCnt = 0;
           }
-          monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, "fetch-" + partitionNum + "-" + consumeCnt, System.nanoTime() + absTimestampBase, State.REQUESTED));
+          long requestTime = System.nanoTime() + absTimestampBase;
           ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
-          monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, "fetch-" + partitionNum + "-" + consumeCnt, System.nanoTime() + absTimestampBase, State.RESPONDED));
+          long respondedTime = System.nanoTime() + absTimestampBase;
           monitorLogWriter.notifyIfNeeded();
           log.debug("fetch {} records.", records.count());
           for (var record: records) {
             log.trace("offset = {}, key = {}, value = {}", record.offset(), record.key(), record.value());
+            monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, record.value(), requestTime, State.REQUESTED));
             ackCounter.decrementAndGet();
-            consumeCnt += 1;
             intervalConsumeCnt += 1;
           }
-          int curCounter = ackCounter.get();
 
-          if (curCounter == 0) {
+          for (var record: records) {
+            monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, record.value(), respondedTime, State.RESPONDED));
+          }
+
+          int curCounter = ackCounter.get();
+          if (curCounter <= 0) {
             log.info("process all fetch request");
             break;
           }
