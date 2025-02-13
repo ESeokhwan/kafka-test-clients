@@ -134,6 +134,7 @@ public class MultiThreadEarliestConsumerWithMonitor implements Runnable {
     props.put("enable.auto.commit", "true");
     props.put("auto.offset.reset", "earliest");
     props.put("max.poll.records", "1000000");
+    props.put("max.partition.fetch.bytes", "2097152");
 
     props.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
     props.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
