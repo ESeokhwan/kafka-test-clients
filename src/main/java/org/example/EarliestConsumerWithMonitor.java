@@ -136,6 +136,7 @@ public class EarliestConsumerWithMonitor implements Runnable {
     props.put("group.id", uuid.toString());
     props.put("enable.auto.commit", "true");
     props.put("auto.offset.reset", "earliest");
+    props.put("max.poll.records", "1000000");
 
     props.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
     props.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
