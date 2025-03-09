@@ -9,12 +9,13 @@ TOPIC=""
 BROKER=""
 MESSAGE_SIZE=""
 MESSAGE_COUNT=""
+MESSAGE_KEY=""
 OUTPUT_DIR=""
 OUTPUT_SUFFIX=""
 WITH_EXPORT="false" # Default is to disable export
 
 # Add options for configuration file path and to control page cache clearing
-while getopts c:j:t:b:s:n:d:f:e: flag
+while getopts c:j:t:b:s:n:k:d:f:e: flag
 do
     case "${flag}" in
         c) CONFIG_FILE=${OPTARG};;    # Configuration file path
@@ -23,6 +24,7 @@ do
         b) BROKER=${OPTARG};;         # Kafka Broker
         s) MESSAGE_SIZE=${OPTARG};;   # Message size
         n) MESSAGE_COUNT=${OPTARG};;  # Number of messages
+	k) MESSAGE_KEY=${OPTARG};;    # Message key
         d) OUTPUT_DIR=${OPTARG};;     # Output directory
         f) OUTPUT_SUFFIX=${OPTARG};;  # Output file suffix
         e) WITH_EXPORT="true";;
@@ -47,6 +49,7 @@ TOPIC=${TOPIC:-$(read_yaml_value "topic")}
 BROKER=${BROKER:-$(read_yaml_value "broker")}
 MESSAGE_SIZE=${MESSAGE_SIZE:-$(read_yaml_value "message_size")}
 MESSAGE_COUNT=${MESSAGE_COUNT:-$(read_yaml_value "message_count")}
+MESSAGE_KEY=${MESSAGE_KEY:-$(read_yaml_value "message_key")}
 OUTPUT_DIR=${OUTPUT_DIR:-$(read_yaml_value "output_dir")}
 OUTPUT_SUFFIX=${OUTPUT_SUFFIX:-$(read_yaml_value "output_suffix")}
 if [ "$WITH_EXPORT" == "false" ]; then
@@ -54,7 +57,7 @@ if [ "$WITH_EXPORT" == "false" ]; then
 fi
 
 # Validation
-if [ -z "$JAR_FILE" ] || [ -z "$TOPIC" ] || [ -z "$BROKER" ] || [ -z "$MESSAGE_SIZE" ] || [ -z "$MESSAGE_COUNT" ] || [ -z "$OUTPUT_DIR" ] || [ -z "$OUTPUT_SUFFIX" ]; then
+if [ -z "$JAR_FILE" ] || [ -z "$TOPIC" ] || [ -z "$BROKER" ] || [ -z "$MESSAGE_SIZE" ] || [ -z "$MESSAGE_COUNT" ] || [ -z "$MESSAGE_KEY" ] || [ -z "$OUTPUT_DIR" ] || [ -z "$OUTPUT_SUFFIX" ]; then
     echo "Error: Missing required configuration values."
     exit 1
 fi
@@ -66,7 +69,7 @@ if [ ! -d "$OUTPUT_DIR" ]; then
 fi
 
 echo "Running Java Kafka producer..."
-java -cp "$JAR_FILE" org.example.SyncProducerWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -n "$MESSAGE_COUNT" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
+java -cp "$JAR_FILE" org.example.SyncProducerWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -n "$MESSAGE_COUNT" -k "$MESSAGE_KEY" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
 echo "Producer job done."
 
 if [[ "$WITH_EXPORT" == "true" ]]; then
