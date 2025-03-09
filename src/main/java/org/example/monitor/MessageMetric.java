@@ -14,36 +14,44 @@ public class MessageMetric {
   private long produceRespondedAt;
 
   @Getter
-  private long consumedAt;
+  private long consumeRequestedAt;
 
-  public MessageMetric(String messageId, long produceRequestedAt, long produceRespondedAt, long consumedAt) {
+  @Getter
+  private long consumeRespondedAt;
+
+  public MessageMetric(String messageId, long produceRequestedAt, long produceRespondedAt, long consumeRequestedAt ,long consumeRespondedAt) {
     this.messageId = messageId;
     this.produceRequestedAt = produceRequestedAt;
     this.produceRespondedAt = produceRespondedAt;
-    this.consumedAt = consumedAt;
+    this.consumeRequestedAt = consumeRequestedAt;
+    this.consumeRespondedAt = consumeRespondedAt;
   }
 
   public long getE2ELatency() {
-    return consumedAt - produceRequestedAt;
+    return consumeRespondedAt - produceRequestedAt;
   }
 
   public long getProduceLatency() {
     return produceRespondedAt - produceRequestedAt;
   }
 
+  public long getConsumeLatency() {
+    return consumeRespondedAt - consumeRequestedAt;
+  }
+
   public MessageMetric withMessageId(String messageId) {
-    return new MessageMetric(messageId, produceRequestedAt, produceRespondedAt, consumedAt);
+    return new MessageMetric(messageId, produceRequestedAt, produceRespondedAt, consumeRequestedAt, consumeRespondedAt);
   }
 
   public MessageMetric withProduceRequestedAt(long produceRequestedAt) {
-    return new MessageMetric(messageId, produceRequestedAt, produceRespondedAt, consumedAt);
+    return new MessageMetric(messageId, produceRequestedAt, produceRespondedAt, consumeRequestedAt, consumeRespondedAt);
   }
 
   public MessageMetric withProduceRespondedAt(long produceRespondedAt) {
-    return new MessageMetric(messageId, produceRequestedAt, produceRespondedAt, consumedAt);
+    return new MessageMetric(messageId, produceRequestedAt, produceRespondedAt, consumeRequestedAt, consumeRespondedAt);
   }
 
   public MessageMetric withConsumedAt(long consumedAt) {
-    return new MessageMetric(messageId, produceRequestedAt, produceRespondedAt, consumedAt);
+    return new MessageMetric(messageId, produceRequestedAt, produceRespondedAt, consumeRequestedAt, consumeRespondedAt);
   }
 }

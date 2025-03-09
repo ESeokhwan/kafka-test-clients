@@ -34,11 +34,15 @@ public class CsvMessageMetricWriteStrategy implements IMessageMetricWriteStrateg
           .append(",")
           .append(String.valueOf(metric.getProduceRespondedAt()))
           .append(",")
-          .append(String.valueOf(metric.getConsumedAt()))
+          .append(String.valueOf(metric.getConsumeRequestedAt()))
+          .append(",")
+          .append(String.valueOf(metric.getConsumeRespondedAt()))
           .append(",")
           .append(String.valueOf((double) metric.getE2ELatency() / 1_000_000.0))
           .append(",")
           .append(String.valueOf((double) metric.getProduceLatency() / 1_000_000.0))
+          .append(",")
+          .append(String.valueOf((double) metric.getConsumeLatency() / 1_000_000.0))
           .append("\n");
     } catch (IOException e) {
       e.printStackTrace();

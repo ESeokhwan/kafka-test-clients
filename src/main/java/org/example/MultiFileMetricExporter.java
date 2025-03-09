@@ -69,19 +69,43 @@ public class MultiFileMetricExporter implements Runnable {
     List<MonitorLog> cLogs = getMonitorLogs(consumerMonitorLogReadStrategy);
 
     HashMap<String, MonitorLog> pLogsMap = new HashMap<>();
+    HashMap<String, MonitorLog> cLogsMap = new HashMap<>();
     pLogs.stream().forEach(e -> pLogsMap.put(generateKey(e), e));
+    cLogs.stream().forEach(e -> cLogsMap.put(generateKey(e), e));
 
     List<MessageMetric> output = new ArrayList<>();
-    for (MonitorLog cLog: cLogs) {
+    List<MonitorLog> cLogMapValuesCopy = new ArrayList<>(cLogsMap.values());
+    for (MonitorLog cLog: cLogMapValuesCopy) {
+      String curKey = generateKey(cLog);
+      if (!cLogsMap.containsKey(curKey)) continue;
+
       MonitorLog pRequestedLog = pLogsMap.remove(pRequestedKey(cLog));
       MonitorLog pRespondedLog = pLogsMap.remove(pRespondedKey(cLog));
+      if (pRequestedLog == null && pRespondedLog == null) continue;
 
-      output.add(new MessageMetric(
-          cLog.getMessageId(), 
-          pRequestedLog != null ? pRequestedLog.getTimestamp() : 0,
-          pRespondedLog != null ? pRespondedLog.getTimestamp() : 0,
-          cLog != null ? cLog.getTimestamp() : 0
-      ));
+      if (cLog.getState() == MonitorLog.State.REQUESTED) {
+        MonitorLog cRespondedLog = cLogsMap.remove(cRespondedKey(cLog));
+        output.add(new MessageMetric(
+                cLog.getMessageId(),
+                pRequestedLog != null ? pRequestedLog.getTimestamp() : 0,
+                pRespondedLog != null ? pRespondedLog.getTimestamp() : 0,
+                cLog != null ? cLog.getTimestamp() : 0,
+                cRespondedLog != null ? cRespondedLog.getTimestamp() : 0
+        ));
+        continue;
+      }
+
+      if (cLog.getState() == MonitorLog.State.RESPONDED) {
+        MonitorLog cRequestedLog = cLogsMap.remove(cRequestedKey(cLog));
+        output.add(new MessageMetric(
+                cLog.getMessageId(),
+                pRequestedLog != null ? pRequestedLog.getTimestamp() : 0,
+                pRespondedLog != null ? pRespondedLog.getTimestamp() : 0,
+                cRequestedLog != null ? cRequestedLog.getTimestamp() : 0,
+                cLog != null ? cLog.getTimestamp() : 0
+        ));
+        continue;
+      }
     }
 
     List<MonitorLog> pLogMapValuesCopy = new ArrayList<>(pLogsMap.values());
@@ -96,6 +120,7 @@ public class MultiFileMetricExporter implements Runnable {
           pLog.getMessageId(), 
           pLog != null ? pLog.getTimestamp() : 0,
           pRespondedLog != null ? pRespondedLog.getTimestamp() : 0,
+          0,
           0
         ));
         continue;
@@ -106,6 +131,7 @@ public class MultiFileMetricExporter implements Runnable {
           pLog.getMessageId(),
           pRequestedLog != null ? pRequestedLog.getTimestamp() : 0,
           pLog != null ? pLog.getTimestamp() : 0,
+          0,
           0
         ));
         continue;
@@ -136,5 +162,13 @@ public class MultiFileMetricExporter implements Runnable {
 
   private String pRespondedKey(MonitorLog log) {
     return log.getMessageId() + "-" + MonitorLog.RequestType.PRODUCE + "-" + MonitorLog.State.RESPONDED;
+  }
+
+  private String cRequestedKey(MonitorLog log) {
+    return log.getMessageId() + "-" + MonitorLog.RequestType.CONSUME + "-" + MonitorLog.State.REQUESTED;
+  }
+
+  private String cRespondedKey(MonitorLog log) {
+    return log.getMessageId() + "-" + MonitorLog.RequestType.CONSUME + "-" + MonitorLog.State.RESPONDED;
   }
 }
