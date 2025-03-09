@@ -59,8 +59,11 @@ if [ "$WITH_EXPORT" == "false" ]; then
     WITH_EXPORT=$(read_yaml_value "with_export")
 fi
 
+# Split TOPIC into an array using ',' as delimiter
+IFS=',' read -r -a TOPIC_ARRAY <<< "$TOPIC"
+
 # Validation
-if [ -z "$JAR_FILE" ] || [ -z "$TOPIC" ] || [ -z "$BROKER" ] || [ -z "$PARTITION_COUNT" ] || [ -z "$MESSAGE_SIZE" ] || [ -z "$MESSAGE_COUNT" ] || [ -z "$REFRESH_INTERVAL" ] || [ -z "$OUTPUT_DIR" ] || [ -z "$OUTPUT_SUFFIX" ]; then
+if [ -z "$JAR_FILE" ] || [ ${#TOPIC_ARRAY[@]} -eq 0 ] || [ -z "$BROKER" ] || [ -z "$PARTITION_COUNT" ] || [ -z "$MESSAGE_SIZE" ] || [ -z "$MESSAGE_COUNT" ] || [ -z "$REFRESH_INTERVAL" ] || [ -z "$OUTPUT_DIR" ] || [ -z "$OUTPUT_SUFFIX" ]; then
     echo "Error: Missing required configuration values."
     exit 1
 fi
@@ -73,7 +76,7 @@ fi
 
 # Java command execution
 echo "Running Java Kafka consumer..."
-java -cp "$JAR_FILE" org.example.MultiThreadEarliestConsumerWithMonitor "$BROKER" "$TOPIC" -p "$PARTITION_COUNT" -s "$MESSAGE_SIZE" -n "$MESSAGE_COUNT" -r "$REFRESH_INTERVAL" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
+java -cp "$JAR_FILE" org.example.MultiThreadEarliestConsumerWithMonitor "$BROKER" "${TOPIC_ARRAY[@]}" -p "$PARTITION_COUNT" -s "$MESSAGE_SIZE" -n "$MESSAGE_COUNT" -r "$REFRESH_INTERVAL" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
 
 if [[ "$WITH_EXPORT" == "true" ]]; then
     echo "Sleep a 5s..."
