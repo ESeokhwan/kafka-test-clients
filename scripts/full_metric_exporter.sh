@@ -46,8 +46,14 @@ if [ -z "$JAR_FILE" ] || [ -z "$P_FILE_PATH" ] || [ -z "$C_FILE_PATH" ] || [ -z 
 fi
 
 # Check if OUTPUT_DIR exists, if not, create it
-if [ ! -e "$OUTPUT_FILE_PATH" ]; then
-    echo "There is no target file ($OUTPUT_FILE_PATH)."
+if [ ! -e "$P_FILE_PATH" ]; then
+    echo "There is no producer log file ($P_FILE_PATH)."
+    exit 1
+fi
+
+# Check if OUTPUT_DIR exists, if not, create it
+if [ ! -e "$C_FILE_PATH" ]; then
+    echo "There is no producer log file ($C_FILE_PATH)."
     exit 1
 fi
 
