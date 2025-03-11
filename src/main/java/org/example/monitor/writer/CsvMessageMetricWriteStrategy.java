@@ -21,7 +21,7 @@ public class CsvMessageMetricWriteStrategy implements IMessageMetricWriteStrateg
     if (writer == null) {
       try {
         this.writer = new BufferedWriter(new FileWriter(filepath));
-        writer.append("message id,produceRequested at,produceResponded at,consumed at,E2E Latency,Producer Latency\n");
+        writer.append("messageId,produceRequestedAt,produceRespondedAt,consumeRequestedAt,consumeRespondedAt,e2eLatency,producerLatency,consumerLatency\n");
       } catch (IOException e) {
         e.printStackTrace();
       }
