@@ -56,6 +56,11 @@ public class MultiPartitionProducerMultiThreadWithMonitor implements Runnable {
   @Option(names = {"-b", "--monitor-batch-size"}, description = "write batch size of monitor log")
   private int monitorBatchSize = 10_000;
 
+  @Getter
+  @Option(names = {"-a", "--is-async"}, description = "Whether this producer work async or not")
+  private boolean isAsync = false;
+
+
   private final MonitorQueue monitoringQueue = MonitorQueue.getInstance();
 
   private MonitorLogWriter monitorLogWriter;
@@ -194,7 +199,11 @@ public class MultiPartitionProducerMultiThreadWithMonitor implements Runnable {
 
           ProducerRecord<String, String> record = new ProducerRecord<>(topicName, partitionNum, messageId, message);
           long requestedTime = System.nanoTime() + absTimestampBase;
-          producer.send(record, new BasicProducerCallback(record)).get();
+	  if (isAsync) {
+            producer.send(record, new BasicProducerCallback(record));
+	  } else {
+            producer.send(record, new BasicProducerCallback(record)).get();
+	  }
           monitoringQueue.enqueue(new MonitorLog(
                   MonitorLog.RequestType.PRODUCE,
                   messageId, requestedTime,

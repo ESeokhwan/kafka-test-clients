@@ -56,6 +56,10 @@ public class SinglePartitionProducerMultiThreadWithMonitor implements Runnable {
   @Option(names = {"-b", "--monitor-batch-size"}, description = "write batch size of monitor log")
   private int monitorBatchSize = 10_000;
 
+  @Getter
+  @Option(names = {"-a", "--is-async"}, description = "Whether this producer work async or not")
+  private boolean isAsync = false;
+
   private final MonitorQueue monitoringQueue = MonitorQueue.getInstance();
 
   private MonitorLogWriter monitorLogWriter;
@@ -83,6 +87,7 @@ public class SinglePartitionProducerMultiThreadWithMonitor implements Runnable {
 
   @Override
   public void run() {
+    System.out.println("################################" + isAsync);
     if (this.producerKey.contains("-")) {
       log.error("producerKey should not contain '-'");
       return;
@@ -195,7 +200,11 @@ public class SinglePartitionProducerMultiThreadWithMonitor implements Runnable {
 
           ProducerRecord<String, String> record = new ProducerRecord<>(topicName, messageId, message);
           long requestedTime = System.nanoTime() + absTimestampBase;
-          producer.send(record, new BasicProducerCallback(record)).get();
+	  if (isAsync) {
+	    producer.send(record, new BasicProducerCallback(record));
+	  } else {
+            producer.send(record, new BasicProducerCallback(record)).get();
+	  }
           monitoringQueue.enqueue(new MonitorLog(
                   MonitorLog.RequestType.PRODUCE,
                   messageId, requestedTime,
