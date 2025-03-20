@@ -31,6 +31,10 @@ public class MultiPartitionProducerWithMonitor implements Runnable {
   private String topicName;
 
   @Getter
+  @Option(names = {"-a", "--is-async"}, description = "Whether this producer work async or not")
+  private boolean isAsync = false;
+
+  @Getter
   @Option(names = {"-k", "--key"},description = "producer key", defaultValue = "test")
   private String producerKey = "BasicProducer";
 
@@ -102,7 +106,11 @@ public class MultiPartitionProducerWithMonitor implements Runnable {
 
           ProducerRecord<String, String> record = new ProducerRecord<>(topicName, j, messageId, message);
           long requestedTime = System.nanoTime() + absTimestampBase;
-          producer.send(record, new BasicProducerCallback(record)).get();
+	  if (isAsync) {
+	    producer.send(record, new BasicProducerCallback(record));
+	  } else {
+	    producer.send(record, new BasicProducerCallback(record)).get();
+	  }
           monitoringQueue.enqueue(new MonitorLog(
                   MonitorLog.RequestType.PRODUCE,
                   messageId, requestedTime,

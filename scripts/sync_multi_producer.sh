@@ -7,6 +7,7 @@ CONFIG_FILE="config.yaml"
 JAR_FILE=""
 TOPIC=""
 BROKER=""
+IS_ASYNC=""
 MESSAGE_SIZE=""
 PARTITION_COUNT=""
 MESSAGE_COUNT=""
@@ -15,13 +16,14 @@ OUTPUT_SUFFIX=""
 WITH_EXPORT="false" # Default is to disable export
 
 # Add options for configuration file path and to control page cache clearing
-while getopts c:j:t:b:s:p:n:d:f:e: flag
+while getopts c:j:t:b:a:s:p:n:d:f:e: flag
 do
     case "${flag}" in
         c) CONFIG_FILE=${OPTARG};;    # Configuration file path
         j) JAR_FILE=${OPTARG};;       # JAR file path
         t) TOPIC=${OPTARG};;          # Kafka Topic
         b) BROKER=${OPTARG};;         # Kafka Broker
+	a) IS_ASYNC=${OPTARG};;       # Whether producer work by async or not
         s) MESSAGE_SIZE=${OPTARG};;   # Message size
         p) PARTITION_COUNT=${OPTARG};; # Number of partitions
         n) MESSAGE_COUNT=${OPTARG};;  # Number of messages
@@ -47,6 +49,7 @@ read_yaml_value() {
 JAR_FILE=${JAR_FILE:-$(read_yaml_value "jar_file")}
 TOPIC=${TOPIC:-$(read_yaml_value "topic")}
 BROKER=${BROKER:-$(read_yaml_value "broker")}
+IS_ASYNC=${IS_ASYNC:-$(read_yaml_value "is_async")}
 MESSAGE_SIZE=${MESSAGE_SIZE:-$(read_yaml_value "message_size")}
 PARTITION_COUNT=${PARTITION_COUNT:-$(read_yaml_value "partition_count")}
 MESSAGE_COUNT=${MESSAGE_COUNT:-$(read_yaml_value "message_count")}
@@ -69,7 +72,11 @@ if [ ! -d "$OUTPUT_DIR" ]; then
 fi
 
 echo "Running Java Kafka producer..."
-java -cp "$JAR_FILE" org.example.MultiPartitionProducerWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -p "$PARTITION_COUNT" -n "$MESSAGE_COUNT" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
+if [[ "$IS_ASYNC" == "true" ]]; then
+    java -cp "$JAR_FILE" org.example.MultiPartitionProducerWithMonitor "$BROKER" "$TOPIC" -a -s "$MESSAGE_SIZE" -p "$PARTITION_COUNT" -n "$MESSAGE_COUNT" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
+else
+    java -cp "$JAR_FILE" org.example.MultiPartitionProducerWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -p "$PARTITION_COUNT" -n "$MESSAGE_COUNT" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
+fi
 echo "Producer job done."
 
 if [[ "$WITH_EXPORT" == "true" ]]; then
