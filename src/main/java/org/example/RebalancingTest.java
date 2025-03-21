@@ -90,7 +90,7 @@ public class RebalancingTest implements Runnable {
     List<KafkaConsumer<String, String>> consumers = new ArrayList<>();
     while (totalRuntime == 0 || System.nanoTime() < expiredTime) {
       for (int i = 0; i < Math.min(roundCnt, topics.length); i++) {
-        if (roundCnt < topics.length) {
+        if (i < roundCnt && roundCnt < topics.length) {
           KafkaConsumer<String, String> tmp = new KafkaConsumer<>(props);
           tmp.subscribe(List.of(topics[i]));
           consumers.add(tmp);
