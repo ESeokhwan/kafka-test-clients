@@ -24,11 +24,11 @@ do
         j) JAR_FILE=${OPTARG};;       # JAR file path
         t) TOPIC=${OPTARG};;          # Kafka Topic
         b) BROKER=${OPTARG};;         # Kafka Broker
-	a) IS_ASYNC=${OPTARG};;       # Whether producer work by async or not
+	      a) IS_ASYNC=${OPTARG};;       # Whether producer work by async or not
         s) MESSAGE_SIZE=${OPTARG};;   # Message size
         p) PARTITION_COUNT=${OPTARG};; # Number of partitions
         n) MESSAGE_COUNT=${OPTARG};;  # Number of messages
-	k) MESSAGE_KEY=${OPTARG};;    # Message key
+        k) MESSAGE_KEY=${OPTARG};;    # Message key
         d) OUTPUT_DIR=${OPTARG};;     # Output directory
         f) OUTPUT_SUFFIX=${OPTARG};;  # Output file suffix
         e) WITH_EXPORT="true";;
@@ -76,9 +76,9 @@ fi
 
 echo "Running Java Kafka producer..."
 if [[ "$IS_ASYNC" == "true" ]]; then
-    java -cp "$JAR_FILE" org.example.SinglePartitionProducerMultiThreadWithMonitor "$BROKER" "$TOPIC" -a -s "$MESSAGE_SIZE" -t "$PARTITION_COUNT" -n "$MESSAGE_COUNT" -k "$MESSAGE_KEY" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
-else 
-    java -cp "$JAR_FILE" org.example.SinglePartitionProducerMultiThreadWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -t "$PARTITION_COUNT" -n "$MESSAGE_COUNT" -k "$MESSAGE_KEY" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
+    java -cp "$JAR_FILE" org.example.MultiPartitionProducerWithMonitor "$BROKER" "$TOPIC" -a -s "$MESSAGE_SIZE" -p "$PARTITION_COUNT" -n "$MESSAGE_COUNT" -k "$MESSAGE_KEY" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
+else
+    java -cp "$JAR_FILE" org.example.MultiPartitionProducerWithMonitor "$BROKER" "$TOPIC" -s "$MESSAGE_SIZE" -p "$PARTITION_COUNT" -n "$MESSAGE_COUNT" -k "$MESSAGE_KEY" -m "${OUTPUT_DIR}/${OUTPUT_SUFFIX}.csv"
 fi
 echo "Producer job done."
 
