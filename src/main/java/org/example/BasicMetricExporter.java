@@ -73,9 +73,13 @@ public class BasicMetricExporter implements Runnable {
       if (pLog.getState() == MonitorLog.State.REQUESTED) {
         MonitorLog pRespondedLog = pLogsMap.remove(respondedKey(pLog));
         output.add(new MessageMetric(
-          pLog.getMessageId(), 
+          pLog.getId(),
           pLog != null ? pLog.getTimestamp() : 0,
           pRespondedLog != null ? pRespondedLog.getTimestamp() : 0,
+          0,
+          0,
+          pLog != null ? pLog.getTimestampNano() : 0,
+          pRespondedLog != null ? pRespondedLog.getTimestampNano() : 0,
           0,
           0
         ));
@@ -84,9 +88,13 @@ public class BasicMetricExporter implements Runnable {
       if(pLog.getState() == MonitorLog.State.RESPONDED) {
         MonitorLog pRequestedLog = pLogsMap.remove(requestedKey(pLog));
         output.add(new MessageMetric(
-          pLog.getMessageId(),
+          pLog.getId(),
           pRequestedLog != null ? pRequestedLog.getTimestamp() : 0,
           pLog != null ? pLog.getTimestamp() : 0,
+          0,
+          0,
+          pRequestedLog != null ? pRequestedLog.getTimestampNano() : 0,
+          pLog != null ? pLog.getTimestampNano() : 0,
           0,
           0
         ));
@@ -110,14 +118,14 @@ public class BasicMetricExporter implements Runnable {
   }
 
   private String generateKey(MonitorLog log) {
-    return log.getMessageId() + "-" + log.getType() + "-" + log.getState();
+    return log.getId() + "-" + log.getType() + "-" + log.getState();
   }
 
   private String requestedKey(MonitorLog log) {
-    return log.getMessageId() + "-" + log.getType() + "-" + MonitorLog.State.REQUESTED;
+    return log.getId() + "-" + log.getType() + "-" + MonitorLog.State.REQUESTED;
   }
 
   private String respondedKey(MonitorLog log) {
-    return log.getMessageId() + "-" + log.getType() + "-" + MonitorLog.State.RESPONDED;
+    return log.getId() + "-" + log.getType() + "-" + MonitorLog.State.RESPONDED;
   }
 }

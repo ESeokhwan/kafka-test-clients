@@ -86,11 +86,15 @@ public class MultiFileMetricExporter implements Runnable {
       if (cLog.getState() == MonitorLog.State.REQUESTED) {
         MonitorLog cRespondedLog = cLogsMap.remove(cRespondedKey(cLog));
         output.add(new MessageMetric(
-                cLog.getMessageId(),
+                cLog.getId(),
                 pRequestedLog != null ? pRequestedLog.getTimestamp() : 0,
                 pRespondedLog != null ? pRespondedLog.getTimestamp() : 0,
                 cLog != null ? cLog.getTimestamp() : 0,
-                cRespondedLog != null ? cRespondedLog.getTimestamp() : 0
+                cRespondedLog != null ? cRespondedLog.getTimestamp() : 0,
+                pRequestedLog != null ? pRequestedLog.getTimestampNano() : 0,
+                pRespondedLog != null ? pRespondedLog.getTimestampNano() : 0,
+                cLog != null ? cLog.getTimestampNano() : 0,
+                cRespondedLog != null ? cRespondedLog.getTimestampNano() : 0
         ));
         continue;
       }
@@ -98,11 +102,15 @@ public class MultiFileMetricExporter implements Runnable {
       if (cLog.getState() == MonitorLog.State.RESPONDED) {
         MonitorLog cRequestedLog = cLogsMap.remove(cRequestedKey(cLog));
         output.add(new MessageMetric(
-                cLog.getMessageId(),
+                cLog.getId(),
                 pRequestedLog != null ? pRequestedLog.getTimestamp() : 0,
                 pRespondedLog != null ? pRespondedLog.getTimestamp() : 0,
                 cRequestedLog != null ? cRequestedLog.getTimestamp() : 0,
-                cLog != null ? cLog.getTimestamp() : 0
+                cLog != null ? cLog.getTimestamp() : 0,
+                pRequestedLog != null ? pRequestedLog.getTimestampNano() : 0,
+                pRespondedLog != null ? pRespondedLog.getTimestampNano() : 0,
+                cRequestedLog != null ? cRequestedLog.getTimestampNano() : 0,
+                cLog != null ? cLog.getTimestampNano() : 0
         ));
         continue;
       }
@@ -117,9 +125,13 @@ public class MultiFileMetricExporter implements Runnable {
       if (pLog.getState() == MonitorLog.State.REQUESTED) {
         MonitorLog pRespondedLog = pLogsMap.remove(pRespondedKey(pLog));
         output.add(new MessageMetric(
-          pLog.getMessageId(), 
+          pLog.getId(),
           pLog != null ? pLog.getTimestamp() : 0,
           pRespondedLog != null ? pRespondedLog.getTimestamp() : 0,
+          0,
+          0,
+          pLog != null ? pLog.getTimestampNano() : 0,
+          pRespondedLog != null ? pRespondedLog.getTimestampNano() : 0,
           0,
           0
         ));
@@ -128,9 +140,13 @@ public class MultiFileMetricExporter implements Runnable {
       if(pLog.getState() == MonitorLog.State.RESPONDED) {
         MonitorLog pRequestedLog = pLogsMap.remove(pRequestedKey(pLog));
         output.add(new MessageMetric(
-          pLog.getMessageId(),
+          pLog.getId(),
           pRequestedLog != null ? pRequestedLog.getTimestamp() : 0,
           pLog != null ? pLog.getTimestamp() : 0,
+          0,
+          0,
+          pRequestedLog != null ? pRequestedLog.getTimestampNano() : 0,
+          pLog != null ? pLog.getTimestampNano() : 0,
           0,
           0
         ));
@@ -153,22 +169,22 @@ public class MultiFileMetricExporter implements Runnable {
   }
 
   private String generateKey(MonitorLog log) {
-    return log.getMessageId() + "-" + log.getType() + "-" + log.getState();
+    return log.getId() + "-" + log.getType() + "-" + log.getState();
   }
 
   private String pRequestedKey(MonitorLog log) {
-    return log.getMessageId() + "-" + MonitorLog.RequestType.PRODUCE + "-" + MonitorLog.State.REQUESTED;
+    return log.getId() + "-" + MonitorLog.RequestType.PRODUCE + "-" + MonitorLog.State.REQUESTED;
   }
 
   private String pRespondedKey(MonitorLog log) {
-    return log.getMessageId() + "-" + MonitorLog.RequestType.PRODUCE + "-" + MonitorLog.State.RESPONDED;
+    return log.getId() + "-" + MonitorLog.RequestType.PRODUCE + "-" + MonitorLog.State.RESPONDED;
   }
 
   private String cRequestedKey(MonitorLog log) {
-    return log.getMessageId() + "-" + MonitorLog.RequestType.CONSUME + "-" + MonitorLog.State.REQUESTED;
+    return log.getId() + "-" + MonitorLog.RequestType.CONSUME + "-" + MonitorLog.State.REQUESTED;
   }
 
   private String cRespondedKey(MonitorLog log) {
-    return log.getMessageId() + "-" + MonitorLog.RequestType.CONSUME + "-" + MonitorLog.State.RESPONDED;
+    return log.getId() + "-" + MonitorLog.RequestType.CONSUME + "-" + MonitorLog.State.RESPONDED;
   }
 }

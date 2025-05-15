@@ -105,16 +105,18 @@ public class MultiPartitionProducerWithMonitor implements Runnable {
           String message = messageGenerator.generate(messageId);
 
           ProducerRecord<String, String> record = new ProducerRecord<>(topicName, j, messageId, message);
-          long requestedTime = System.nanoTime() + absTimestampBase;
-	  if (isAsync) {
-	    producer.send(record, new BasicProducerCallback(record));
-	  } else {
-	    producer.send(record, new BasicProducerCallback(record)).get();
-	  }
+
+          long requestedTime = System.currentTimeMillis();
+          long requestedTimeNano = System.nanoTime() + absTimestampBase;
+          if (isAsync) {
+            producer.send(record, new BasicProducerCallback(record));
+          } else {
+            producer.send(record, new BasicProducerCallback(record)).get();
+          }
           monitoringQueue.enqueue(new MonitorLog(
                   MonitorLog.RequestType.PRODUCE,
-                  messageId, requestedTime,
-                  MonitorLog.State.REQUESTED
+                  messageId, MonitorLog.State.REQUESTED,
+                  requestedTime, requestedTimeNano
           ));
           monitorLogWriter.notifyIfNeeded();
         }
@@ -165,13 +167,14 @@ public class MultiPartitionProducerWithMonitor implements Runnable {
         exception.printStackTrace();
         return;
       }
-      long respondedTime = System.nanoTime() + absTimestampBase;
+      long respondedTimeNano = System.nanoTime() + absTimestampBase;
+      long respondedTime = System.currentTimeMillis();
 
       String messageId = record.value();
       monitoringQueue.enqueue(new MonitorLog(
           MonitorLog.RequestType.PRODUCE, 
-          messageId, respondedTime,
-          MonitorLog.State.RESPONDED
+          messageId, MonitorLog.State.RESPONDED,
+          respondedTime, respondedTimeNano
       ));
       monitorLogWriter.notifyIfNeeded();
 

@@ -73,11 +73,12 @@ public class BasicConsumerWithMonitor implements Runnable {
       long expiredTime = System.nanoTime() + totalRuntime * 1000 * 1000 * 1000;
       while (totalRuntime == 0 || System.nanoTime() < expiredTime) {
         ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
-        long curTime = System.nanoTime() + absTimestampBase;
+        long curTimeNano = System.nanoTime() + absTimestampBase;
+        long curTime = System.currentTimeMillis();
         log.debug("fetch {} records.", records.count());
         for (var record: records) {
           log.trace("offset = {}, key = {}, value = {}", record.offset(), record.key(), record.value());
-          monitoringQueue.enqueue(new MonitorLog(MonitorLog.RequestType.CONSUME, record.value(), curTime, MonitorLog.State.RESPONDED));
+          monitoringQueue.enqueue(new MonitorLog(MonitorLog.RequestType.CONSUME, record.value(), MonitorLog.State.RESPONDED, curTime, curTimeNano));
           monitorLogWriter.notifyIfNeeded();
         }
       }

@@ -105,16 +105,17 @@ public class BasicProducerWithMonitor implements Runnable {
         String message = messageGenerator.generate(messageId);
         
         ProducerRecord<String, String> record = new ProducerRecord<>(topicName, message);
-        long requestedTime = System.nanoTime() + absTimestampBase;
-	if (isAsync) {
-	  producer.send(record, new BasicProducerCallback(record));
-	} else {
-	  producer.send(record, new BasicProducerCallback(record)).get();
-	}
+        long curTime = System.currentTimeMillis();
+        long curTimeNano = System.nanoTime() + absTimestampBase;
+        if (isAsync) {
+          producer.send(record, new BasicProducerCallback(record));
+        } else {
+          producer.send(record, new BasicProducerCallback(record)).get();
+        }
         monitoringQueue.enqueue(new MonitorLog(
             MonitorLog.RequestType.PRODUCE, 
-            messageId, requestedTime, 
-            MonitorLog.State.REQUESTED
+            messageId, MonitorLog.State.REQUESTED,
+            curTime, curTimeNano
         ));
         monitorLogWriter.notifyIfNeeded();
       }
@@ -164,13 +165,14 @@ public class BasicProducerWithMonitor implements Runnable {
         exception.printStackTrace();
         return;
       }
-      long respondedTime = System.nanoTime() + absTimestampBase;
 
+      long curTimeNano = System.nanoTime() + absTimestampBase;
+      long curTime = System.currentTimeMillis();
       String messageId = record.value();
       monitoringQueue.enqueue(new MonitorLog(
           MonitorLog.RequestType.PRODUCE, 
-          messageId, respondedTime,
-          MonitorLog.State.RESPONDED
+          messageId, MonitorLog.State.RESPONDED,
+          curTime, curTimeNano
       ));
       monitorLogWriter.notifyIfNeeded();
 

@@ -97,20 +97,22 @@ public class EarliestConsumerWithMonitor implements Runnable {
           consumer.seekToBeginning(Arrays.stream(topics).map(topic -> new TopicPartition(topic, 0)).toList());
           intervalConsumeCnt = 0;
         }
-        long requestTime = System.nanoTime() + absTimestampBase;
+        long requestTime = System.currentTimeMillis();
+        long requestTimeNano = System.nanoTime() + absTimestampBase;
         ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
-        long respondedTime = System.nanoTime() + absTimestampBase;
+        long respondedTimeNano = System.nanoTime() + absTimestampBase;
+        long respondedTime = System.currentTimeMillis();
         monitorLogWriter.notifyIfNeeded();
         log.debug("fetch {} records.", records.count());
         for (var record: records) {
           log.trace("offset = {}, key = {}, value = {}", record.offset(), record.key(), record.value());
-          monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, record.value(), requestTime, State.REQUESTED));
+          monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, record.value(), State.REQUESTED, requestTime, requestTimeNano));
           consumeCnt += 1;
           intervalConsumeCnt += 1;
         }
 
         for (var record: records) {
-          monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, record.value(), respondedTime, State.RESPONDED));
+          monitoringQueue.enqueue(new MonitorLog(RequestType.CONSUME, record.value(), State.RESPONDED, respondedTime, respondedTimeNano));
         }
 
         if (consumeCnt >= numRecord) {

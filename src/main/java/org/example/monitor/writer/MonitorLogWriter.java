@@ -58,7 +58,7 @@ public class MonitorLogWriter implements Runnable {
         syncedWait();
       }
       MonitorLog log = monitorQueue.dequeue();
-      String messageId = messageGenerator.extractMessageId(log.getMessageId());
+      String messageId = messageGenerator.extractMessageId(log.getId());
       writeStrategy.write(log.withMessageId(messageId));
       curWrittenCnt += 1;
       tryFlushBatch();

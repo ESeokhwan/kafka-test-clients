@@ -21,7 +21,7 @@ public class CsvMonitorLogWriteStrategy implements IMonitorLogWriteStrategy {
     if (writer == null) {
       try {
         this.writer = new BufferedWriter(new FileWriter(filepath));
-        writer.append("RequestType,MessageId,Timestamp,state\n");
+        writer.append("RequestType,id,State,Timestamp,TimestampNano\n");
       } catch (IOException e) {
         e.printStackTrace();
       }
@@ -30,11 +30,13 @@ public class CsvMonitorLogWriteStrategy implements IMonitorLogWriteStrategy {
     try {
       writer.append(log.getType().name())
           .append(",")
-          .append(log.getMessageId())
+          .append(log.getId())
+          .append(",")
+          .append(log.getState().name())
           .append(",")
           .append(String.valueOf(log.getTimestamp()))
           .append(",")
-          .append(log.getState().name())
+          .append(String.valueOf(log.getTimestampNano()))
           .append("\n");
     } catch (IOException e) {
       e.printStackTrace();
