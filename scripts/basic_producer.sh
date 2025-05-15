@@ -23,10 +23,10 @@ do
         j) JAR_FILE=${OPTARG};;       # JAR file path
         t) TOPIC=${OPTARG};;          # Kafka Topic
         b) BROKER=${OPTARG};;         # Kafka Broker
-	a) IS_ASYNC=${OPTARG};;       # Whether producer work by async or not
+	      a) IS_ASYNC=${OPTARG};;       # Whether producer work by async or not
         s) MESSAGE_SIZE=${OPTARG};;   # Message size
         n) MESSAGE_COUNT=${OPTARG};;  # Number of messages
-	k) MESSAGE_KEY=${OPTARG};;    # Message key
+	      k) MESSAGE_KEY=${OPTARG};;    # Message key
         d) OUTPUT_DIR=${OPTARG};;     # Output directory
         f) OUTPUT_SUFFIX=${OPTARG};;  # Output file suffix
         e) WITH_EXPORT="true";;
