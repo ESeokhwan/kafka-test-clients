@@ -85,15 +85,18 @@ public class RebalancingTest implements Runnable {
 
     int consumeCnt = 0;
     int intervalConsumeCnt = 0;
-    int roundCnt = 1;
+    int roundCntReal = 0;
+    int roundCnt = 0;
     long expiredTime = System.nanoTime() + totalRuntime * 1000 * 1000 * 1000;
     List<KafkaConsumer<String, String>> consumers = new ArrayList<>();
     while (totalRuntime == 0 || System.nanoTime() < expiredTime) {
-      for (int i = 0; i < Math.min(roundCnt, topics.length); i++) {
-        if (i < roundCnt && roundCnt < topics.length) {
-          KafkaConsumer<String, String> tmp = new KafkaConsumer<>(props);
-          tmp.subscribe(List.of(topics[i]));
-          consumers.add(tmp);
+      for (int i = 0; i < Math.min(roundCnt + 1, topics.length); i++) {
+        if (i >= roundCnt && roundCnt < topics.length) {
+	  if (roundCntReal % 10 == 0) {
+	    KafkaConsumer<String, String> tmp = new KafkaConsumer<>(props);
+            tmp.subscribe(List.of(topics[i]));
+	    consumers.add(tmp);
+	  }
           break;
         }
         KafkaConsumer<String, String> consumer = consumers.get(i);
@@ -117,7 +120,10 @@ public class RebalancingTest implements Runnable {
       if (consumeCnt >= numRecord) {
         break;
       }
-      roundCnt += 1;
+      if (roundCntReal % 10 == 0) {
+	roundCnt += 1;
+      }
+      roundCntReal += 1;
     }
 
     monitorLogWriter.gracefulShutdown();
