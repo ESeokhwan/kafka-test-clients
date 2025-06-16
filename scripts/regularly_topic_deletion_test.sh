@@ -12,7 +12,7 @@ COUNT=""
 INTERVAL=""
 
 # Add options for configuration file path and to control page cache clearing
-while getopts c:j:b:p:s:c:i: flag
+while getopts c:j:b:p:s:n:i: flag
 do
     case "${flag}" in
         c) CONFIG_FILE=${OPTARG};;    # Configuration file path
@@ -20,7 +20,7 @@ do
         b) BROKER=${OPTARG};;         # Kafka Broker
         p) TOPIC_PREFIX=${OPTARG};;   # Topic prefix
         s) START_INDEX=${OPTARG};;    # Starting index for topic names
-        c) COUNT=${OPTARG};;          # Number of topics to create
+        n) COUNT=${OPTARG};;          # Number of topics to create
         i) INTERVAL=${OPTARG};;       # interval
     esac
 done
