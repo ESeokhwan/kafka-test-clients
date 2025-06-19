@@ -2,55 +2,79 @@ package org.example;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
+import moniq.MonitorLog;
+import moniq.MonitorQueue;
+import moniq.util.IMessageAdaptor;
+import moniq.writer.MonitorLogWriter;
 import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.logging.log4j.ThreadContext;
-import org.example.monitor.MonitorLog;
-import org.example.monitor.MonitorQueue;
-import org.example.monitor.writer.CsvMonitorLogWriteStrategy;
-import org.example.monitor.writer.MonitorLogWriter;
-import org.example.util.EfficientMessageGenerator;
-import org.example.util.IMessageAdaptor;
 
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
 
 @Slf4j
-public class BasicProducerWithMonitor implements Runnable {
+public class SimpleProducer implements Runnable {
 
   @Getter
   @Parameters(index = "0", description = "Kafka Brokers")
   private String brokers;
 
   @Getter
-  @Parameters(index = "1", description = "Topic Name")
-  private String topicName;
+  @Parameters(index = "1", description = "Prefix Topic Name")
+  private String topicPrefix;
 
   @Getter
-  @Option(names = {"-a", "--is-async"}, description = "Whether this producer work async or not")
+  @Parameters(index = "2", description = "Prefix of Client ID")
+  private String clientIdPrefix = "simple-producer";
+
+  @Getter
+  @Option(names = {"-a", "--is-async"}, description = "Whether each producer works async or not")
   private boolean isAsync = false;
 
   @Getter
-  @Option(names = {"-k", "--key"},description = "producer key", defaultValue = "test")
-  private String producerKey = "BasicProducer";
+  @Option(names = {"-a", "--is-topic-shared"}, description = "Whether each producer shares topic for same service or not")
+  private boolean isTopicShared = false;
 
   @Getter
-  @Option(names = {"-n", "--num-record"}, description = "The number of records")
-  private int numRecord = 100_000;
+  @Option(names = {"-c", "--producer-count"}, description = "Number of producers")
+  private int producerCount = 1;
+
+  @Getter
+  @Option(names = {"-C", "--service-count"}, description = "Number of services")
+  private int serviceCount = 1;
+
+  @Getter
+  @Option(names = {"-i", "--interval"}, description = "Interval between each produce (ms)")
+  private int interval = 0;
 
   @Getter
   @Option(names = {"-s", "--record-size"}, description = "Size of a single record(byte)")
   private int messageSize = 1000;
+
+  @Getter
+  @Option(names = {"-n", "--num-round"}, description = "The number of rounds of each producer and service")
+  private int numRecord = 100_000;
+
+  @Getter
+  @Option(names = {"-n", "--total-record"}, description = "The total number of records to produce")
+  private int totalRecord = 100_000;
+
+  @Getter
+  @Option(names = {"-t", "--running-time"}, description = "Running time of producer (ms)")
+  private int runningTime = 100_000;
 
   @Getter
   @Option(names = {"-m", "--monitor-file"}, description = "path of monitoring output file")
@@ -70,7 +94,7 @@ public class BasicProducerWithMonitor implements Runnable {
 
   private long absTimestampBase;
 
-  public BasicProducerWithMonitor() {
+  public SimpleProducer() {
     super();
   }
 
@@ -79,7 +103,7 @@ public class BasicProducerWithMonitor implements Runnable {
     String pid = rt.getName();
     ThreadContext.put("PID", pid);
 
-    new CommandLine((new BasicProducerWithMonitor()))
+    new CommandLine((new SimpleProducer()))
         .execute(args);
 
     log.info("DONE");
@@ -87,10 +111,6 @@ public class BasicProducerWithMonitor implements Runnable {
 
   @Override
   public void run() {
-    if (this.producerKey.contains("-")) {
-      log.error("producerKey should not contain '-'");
-      return;
-    }
     absTimestampBase = System.currentTimeMillis() * 1_000_000 - System.nanoTime();
 
     Properties props = createProducerConfig();
@@ -99,34 +119,8 @@ public class BasicProducerWithMonitor implements Runnable {
     ackCounter.set(numRecord);
     monitorLogWriteThread.start();
 
-    try (Producer<String, String> producer = new KafkaProducer<>(props)) {
-      for (int i = 0; i < numRecord; i++) {
-        String messageId = this.producerKey + "-" + String.valueOf(i + 1);
-        String message = messageGenerator.generate(messageId);
-        
-        ProducerRecord<String, String> record = new ProducerRecord<>(topicName, message);
-        long curTime = System.currentTimeMillis();
-        long curTimeNano = System.nanoTime() + absTimestampBase;
-        if (isAsync) {
-          producer.send(record, new BasicProducerCallback(record));
-        } else {
-          producer.send(record, new BasicProducerCallback(record)).get();
-        }
-        monitoringQueue.enqueue(new MonitorLog(
-            MonitorLog.RequestType.PRODUCE, 
-            messageId, MonitorLog.State.REQUESTED,
-            curTime, curTimeNano
-        ));
-        monitorLogWriter.notifyIfNeeded();
-      }
-    } catch (Exception e) {
-      log.error("Error in sending record {}", e);
-    }
-    
-    try {
-      monitorLogWriteThread.join();
-    } catch (InterruptedException e) {
-      e.printStackTrace();
+    for (int i = 0; i < producerCount; i++) {
+
     }
   }
 
@@ -149,6 +143,63 @@ public class BasicProducerWithMonitor implements Runnable {
         monitorBatchSize
     );
     return new Thread(monitorLogWriter);
+  }
+
+  public class ProducerThread implements Runnable {
+
+    private final Properties props;
+    private final int index;
+    private final List<ServiceInfo> services;
+
+    private final Boolean startFlag;
+    private final Boolean endFlag;
+
+    public ProducerThread(Properties props, int index, List<ServiceInfo> services) {
+      this.props = props;
+      this.index = index;
+      this.services = services;
+    }
+
+
+    @Override
+    public void run() {
+      int tick = 0;
+      List<Integer> serviceCounts = new ArrayList<>();
+      for (ServiceInfo service : services) {
+        serviceCounts.add(0);
+      }
+
+      try (Producer<String, String> producer = new KafkaProducer<>(props)) {
+        while (!endFlag) {
+          long startTimeNano = System.nanoTime() + absTimestampBase;
+          for (int i = 0; i < services.size(); i++) {
+            ServiceInfo service = services.get(i);
+            if (tick % service.interval() != 0) continue;
+            String coreMessage = service.topicName() + "-" + serviceCounts.get(i);
+            String message = messageGenerator.generate(coreMessage);
+
+            ProducerRecord<String, String> record = new ProducerRecord<>(service.topicName(), coreMessage, message);
+            long curTime = System.currentTimeMillis();
+            long curTimeNano = System.nanoTime() + absTimestampBase;
+            producer.send(record, new BasicProducerCallback(record));
+
+            monitoringQueue.enqueue(new MonitorLog(
+                "PRODUCE",
+                coreMessage,
+                "REQUESTED",
+                curTime,
+                curTimeNano
+            ));
+            monitorLogWriter.notifyIfNeeded();
+          }
+          long elapsedTime = System.nanoTime() - startTimeNano;
+
+        }
+
+      } catch (Exception e) {
+        log.error("Error in sending record {}", e);
+      }
+    }
   }
 
   public class BasicProducerCallback implements Callback {
