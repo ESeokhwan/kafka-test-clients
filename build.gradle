@@ -13,6 +13,7 @@ repositories {
 
 dependencies {
     implementation fileTree(dir: 'kafka-clients/clients/build/libs', include: ['kafka-clients*.jar'])
+    implementation fileTree(dir: 'moniq/build/libs', include: ['moniq*.jar'])
 
     implementation 'info.picocli:picocli-codegen:4.7.4'
     implementation 'org.slf4j:slf4j-api:2.0.7'
