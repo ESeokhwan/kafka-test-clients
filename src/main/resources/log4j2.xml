@@ -19,9 +19,7 @@
       <AppenderRef ref="FileLogger" />
     </Root>
 
-    <!-- 특정 패키지에 대한 로그 레벨 설정 -->
-    <Logger name="com.example" level="debug" additivity="false">
-      <AppenderRef ref="Console" />
+    <Logger name="org.apache.kafka" level="debug" additivity="false">
       <AppenderRef ref="FileLogger" />
     </Logger>
   </Loggers>
