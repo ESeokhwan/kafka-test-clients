@@ -5,6 +5,7 @@ import java.lang.management.RuntimeMXBean;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import lombok.Getter;
@@ -21,6 +22,8 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.logging.log4j.ThreadContext;
 
+import org.example.core.ProducerThread;
+import org.example.core.ServiceInfo;
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
@@ -84,7 +87,7 @@ public class SimpleProducer implements Runnable {
   @Option(names = {"-b", "--monitor-batch-size"}, description = "write batch size of monitor log")
   private int monitorBatchSize = 10_000;
 
-  private final MonitorQueue monitoringQueue = MonitorQueue.getInstance();
+  private final MonitorQueue monitoringQueue = new MonitorQueue();
 
   private MonitorLogWriter monitorLogWriter;
 
@@ -119,8 +122,42 @@ public class SimpleProducer implements Runnable {
     ackCounter.set(numRecord);
     monitorLogWriteThread.start();
 
-    for (int i = 0; i < producerCount; i++) {
+    AtomicBoolean startFlag = new AtomicBoolean(false);
+    AtomicBoolean endFlag = new AtomicBoolean(false);
 
+    List<Thread> producerThreads = new ArrayList<>();
+    for (int i = 0; i < producerCount; i++) {
+      ProducerThread pt = new ProducerThread(
+          props,
+          i,
+          List.of(new ServiceInfo("service", "service", 1000, interval, 0)),
+          new BasicProducerCallback(null),
+          startFlag,
+          endFlag,
+          messageGenerator,
+          monitorLogWriter,
+          monitoringQueue
+      );
+      Thread t = new Thread(pt);
+      producerThreads.add(t);
+      t.start();
+    }
+
+    try {
+      Thread.sleep(3000);
+    } catch (InterruptedException e) {
+      throw new RuntimeException(e);
+    }
+    startFlag.set(true);
+
+    // TODO: Add a mechanism to stop the producer threads after running time or total record count
+
+    for (Thread thread : producerThreads) {
+      try {
+        thread.join();
+      } catch (InterruptedException e) {
+        throw new RuntimeException(e);
+      }
     }
   }
 
@@ -143,63 +180,6 @@ public class SimpleProducer implements Runnable {
         monitorBatchSize
     );
     return new Thread(monitorLogWriter);
-  }
-
-  public class ProducerThread implements Runnable {
-
-    private final Properties props;
-    private final int index;
-    private final List<ServiceInfo> services;
-
-    private final Boolean startFlag;
-    private final Boolean endFlag;
-
-    public ProducerThread(Properties props, int index, List<ServiceInfo> services) {
-      this.props = props;
-      this.index = index;
-      this.services = services;
-    }
-
-
-    @Override
-    public void run() {
-      int tick = 0;
-      List<Integer> serviceCounts = new ArrayList<>();
-      for (ServiceInfo service : services) {
-        serviceCounts.add(0);
-      }
-
-      try (Producer<String, String> producer = new KafkaProducer<>(props)) {
-        while (!endFlag) {
-          long startTimeNano = System.nanoTime() + absTimestampBase;
-          for (int i = 0; i < services.size(); i++) {
-            ServiceInfo service = services.get(i);
-            if (tick % service.interval() != 0) continue;
-            String coreMessage = service.topicName() + "-" + serviceCounts.get(i);
-            String message = messageGenerator.generate(coreMessage);
-
-            ProducerRecord<String, String> record = new ProducerRecord<>(service.topicName(), coreMessage, message);
-            long curTime = System.currentTimeMillis();
-            long curTimeNano = System.nanoTime() + absTimestampBase;
-            producer.send(record, new BasicProducerCallback(record));
-
-            monitoringQueue.enqueue(new MonitorLog(
-                "PRODUCE",
-                coreMessage,
-                "REQUESTED",
-                curTime,
-                curTimeNano
-            ));
-            monitorLogWriter.notifyIfNeeded();
-          }
-          long elapsedTime = System.nanoTime() - startTimeNano;
-
-        }
-
-      } catch (Exception e) {
-        log.error("Error in sending record {}", e);
-      }
-    }
   }
 
   public class BasicProducerCallback implements Callback {
