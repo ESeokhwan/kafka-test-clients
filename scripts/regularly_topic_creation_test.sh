@@ -5,19 +5,23 @@ CONFIG_FILE=""
 JAR_FILE=""
 BROKER=""
 TOPIC_PREFIX=""
+PARTITION_COUNT=""
+REPLICATION_FACTOR=""
 START_INDEX=""
 COUNT=""
 INTERVAL=""
 IS_ASYNC=""
 
 # Add options for configuration file path and parameters
-while getopts c:j:b:p:s:n:i:a: flag
+while getopts c:j:b:p:P:r:s:n:i:a: flag
 do
     case "${flag}" in
         c) CONFIG_FILE=${OPTARG};;        # Configuration file path
         j) JAR_FILE=${OPTARG};;          # JAR file path
         b) BROKER=${OPTARG};;            # Kafka Broker
         p) TOPIC_PREFIX=${OPTARG};;      # Topic prefix
+        P) PARTITION_COUNT=${OPTARG};;   # Partition count
+        r) REPLICATION_FACTOR=${OPTARG};; # Replication factor
         s) START_INDEX=${OPTARG};;       # Starting index for topic names
         n) COUNT=${OPTARG};;             # Number of topics to create
         i) INTERVAL=${OPTARG};;          # Interval in milliseconds
@@ -45,6 +49,8 @@ read_yaml_value() {
 JAR_FILE=${JAR_FILE:-$(read_yaml_value "jar_file")}
 BROKER=${BROKER:-$(read_yaml_value "broker")}
 TOPIC_PREFIX=${TOPIC_PREFIX:-$(read_yaml_value "topic_prefix")}
+PARTITION_COUNT=${PARTITION_COUNT:-$(read_yaml_value "partition_count")}
+REPLICATION_FACTOR=${REPLICATION_FACTOR:-$(read_yaml_value "replication_factor")}
 START_INDEX=${START_INDEX:-$(read_yaml_value "start_index")}
 COUNT=${COUNT:-$(read_yaml_value "count")}
 INTERVAL=${INTERVAL:-$(read_yaml_value "interval")}
@@ -64,10 +70,18 @@ if [ ! -f "$JAR_FILE" ]; then
 fi
 
 # Build Java command with arguments
-JAVA_CMD="java -cp \"$JAR_FILE\" org.example.RegularlyTopicDeletionTest"
+JAVA_CMD="java -cp \"$JAR_FILE\" org.example.RegularlyTopicCreationTest"
 JAVA_CMD="$JAVA_CMD $BROKER $TOPIC_PREFIX"
 
 # Add optional parameters if they exist
+if [ -n "$PARTITION_COUNT" ]; then
+    JAVA_CMD="$JAVA_CMD --partition-count $PARTITION_COUNT"
+fi
+
+if [ -n "$REPLICATION_FACTOR" ]; then
+    JAVA_CMD="$JAVA_CMD --replication-factor $REPLICATION_FACTOR"
+fi
+
 if [ -n "$START_INDEX" ]; then
     JAVA_CMD="$JAVA_CMD --start-index $START_INDEX"
 fi
@@ -85,12 +99,14 @@ if [ -n "$IS_ASYNC" ] && [ "$IS_ASYNC" = "true" ]; then
 fi
 
 # Pre-execution logging
-echo "=== Kafka Topic Deleter Execution Log ==="
+echo "=== Kafka Topic Creator Execution Log ==="
 echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "Configuration File: $CONFIG_FILE"
 echo "JAR File: $JAR_FILE"
 echo "Kafka Broker: $BROKER"
 echo "Topic Prefix: $TOPIC_PREFIX"
+echo "Partition Count: ${PARTITION_COUNT:-default}"
+echo "Replication Factor: ${REPLICATION_FACTOR:-default}"
 echo "Start Index: ${START_INDEX:-default}"
 echo "Topic Count: ${COUNT:-default}"
 echo "Interval (ms): ${INTERVAL:-default}"
@@ -99,7 +115,7 @@ echo "Full Command: $JAVA_CMD"
 echo "==========================================="
 
 # Java command execution
-echo "Starting Kafka Topic Deletion Test..."
+echo "Starting Kafka Topic Creation Test..."
 eval $JAVA_CMD
 EXIT_CODE=$?
 

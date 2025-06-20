@@ -22,7 +22,7 @@ import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 
 @Slf4j
-public class RegularlyTopicDeletionTest implements Runnable {
+public class RegularlyTopicCreationTest implements Runnable {
 
     @Getter
     @Parameters(index = "0", description = "Kafka Brokers")
@@ -31,6 +31,14 @@ public class RegularlyTopicDeletionTest implements Runnable {
     @Getter
     @Parameters(index = "1", description = "Topic Prefix")
     private String topicPrefix;
+
+    @Getter
+    @Option(names = {"-p", "--partition-count"}, description = "Number of partitions for each topic. Default: 1")
+    private int partitionCount = 1;
+
+    @Getter
+    @Option(names = {"-r", "--replication-factor"}, description = "Replication factor for each topic. Default: 1")
+    private short replicationFactor = 1;
 
     @Getter
     @Option(names = {"-s", "--start-index"}, description = "Start index of topic names. It will be used with topicPrefix. Default: 0")
@@ -52,7 +60,7 @@ public class RegularlyTopicDeletionTest implements Runnable {
     private MonitorLogWriter monitorLogWriter;
     private Thread monitorLogWriterThread;
 
-    public RegularlyTopicDeletionTest() {
+    public RegularlyTopicCreationTest() {
         super();
     }
 
@@ -71,8 +79,7 @@ public class RegularlyTopicDeletionTest implements Runnable {
             for (int i = 0; i < count; i++) {
                 long startTimestamp = System.currentTimeMillis();
                 String topicName = topicPrefix + (startIndex + i);
-                doDeleteTopic(adminClient, topicName);
-
+                doCreateTopic(adminClient, topicName);
                 try {
                     long elapsedTimeMs = System.currentTimeMillis() - startTimestamp;
                     Thread.sleep(Math.max(interval - (int) elapsedTimeMs, 0));
@@ -94,10 +101,11 @@ public class RegularlyTopicDeletionTest implements Runnable {
         return props;
     }
 
-    private void doDeleteTopic(AdminClient adminClient, String topicName) {
+    private void doCreateTopic(AdminClient adminClient, String topicName) {
         addMonitorLog(topicName, "REQUESTED");
-
-        KafkaFuture<Void> future = adminClient.deleteTopics(List.of(topicName)).all();
+        KafkaFuture<Void> future = adminClient.createTopics(
+                List.of(new NewTopic(topicName, partitionCount, replicationFactor))
+        ).all();
         if (!isAsync) {
             try {
                 future.get(); // Wait for the deletion to complete if not async
@@ -108,13 +116,13 @@ public class RegularlyTopicDeletionTest implements Runnable {
         }
     }
 
-    private void addMonitorLog(String topicName, String status) {
+    private void addMonitorLog(String topicName, String state) {
         long timestamp = System.currentTimeMillis();
         long timestampNano = System.nanoTime();
         monitoringQueue.enqueue(new MonitorLog(
-                "DELETE_TOPIC",
+                "CREATE_TOPIC",
                 topicName,
-                status,
+                state,
                 timestamp,
                 timestampNano
         ));
@@ -136,7 +144,7 @@ public class RegularlyTopicDeletionTest implements Runnable {
         String pid = rt.getName();
         ThreadContext.put("PID", pid);
 
-        new CommandLine(new RegularlyTopicDeletionTest())
+        new CommandLine(new RegularlyTopicCreationTest())
                 .execute(args);
     }
 }
