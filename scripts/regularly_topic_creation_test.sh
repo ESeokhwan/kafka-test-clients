@@ -8,12 +8,14 @@ TOPIC_PREFIX=""
 PARTITION_COUNT=""
 REPLICATION_FACTOR=""
 START_INDEX=""
-COUNT=""
+ROUND_COUNT=""
 INTERVAL=""
+PER_ROUND_COUNT=""
+USE_BATCH=""
 IS_ASYNC=""
 
 # Add options for configuration file path and parameters
-while getopts c:j:b:p:P:r:s:n:i:a: flag
+while getopts c:j:b:p:P:r:s:n:i:N:B:a: flag
 do
     case "${flag}" in
         c) CONFIG_FILE=${OPTARG};;        # Configuration file path
@@ -23,8 +25,10 @@ do
         P) PARTITION_COUNT=${OPTARG};;   # Partition count
         r) REPLICATION_FACTOR=${OPTARG};; # Replication factor
         s) START_INDEX=${OPTARG};;       # Starting index for topic names
-        n) COUNT=${OPTARG};;             # Number of topics to create
+        n) ROUND_COUNT=${OPTARG};;       # Number of rounds
         i) INTERVAL=${OPTARG};;          # Interval in milliseconds
+        N) PER_ROUND_COUNT=${OPTARG};;   # Number of topics to create for each round
+        B) USE_BATCH=${OPTARG};;         # Use batch flag (true/false)
         a) IS_ASYNC=${OPTARG};;          # Is async flag (true/false)
     esac
 done
@@ -52,8 +56,10 @@ TOPIC_PREFIX=${TOPIC_PREFIX:-$(read_yaml_value "topic_prefix")}
 PARTITION_COUNT=${PARTITION_COUNT:-$(read_yaml_value "partition_count")}
 REPLICATION_FACTOR=${REPLICATION_FACTOR:-$(read_yaml_value "replication_factor")}
 START_INDEX=${START_INDEX:-$(read_yaml_value "start_index")}
-COUNT=${COUNT:-$(read_yaml_value "count")}
+ROUND_COUNT=${ROUND_COUNT:-$(read_yaml_value "round_count")}
 INTERVAL=${INTERVAL:-$(read_yaml_value "interval")}
+PER_ROUND_COUNT=${PER_ROUND_COUNT:-$(read_yaml_value "per_round_count")}
+USE_BATCH=${USE_BATCH:-$(read_yaml_value "use_batch")}
 IS_ASYNC=${IS_ASYNC:-$(read_yaml_value "is_async")}
 
 # Validation for required parameters
@@ -86,12 +92,20 @@ if [ -n "$START_INDEX" ]; then
     JAVA_CMD="$JAVA_CMD --start-index $START_INDEX"
 fi
 
-if [ -n "$COUNT" ]; then
-    JAVA_CMD="$JAVA_CMD --count $COUNT"
+if [ -n "$ROUND_COUNT" ]; then
+    JAVA_CMD="$JAVA_CMD --round-count $ROUND_COUNT"
 fi
 
 if [ -n "$INTERVAL" ]; then
     JAVA_CMD="$JAVA_CMD --interval $INTERVAL"
+fi
+
+if [ -n "$PER_ROUND_COUNT" ]; then
+    JAVA_CMD="$JAVA_CMD --per-round-count $PER_ROUND_COUNT"
+fi
+
+if [ -n "$USE_BATCH" ] && [ "$USE_BATCH" = "true" ]; then
+    JAVA_CMD="$JAVA_CMD --use-batch"
 fi
 
 if [ -n "$IS_ASYNC" ] && [ "$IS_ASYNC" = "true" ]; then
@@ -108,8 +122,10 @@ echo "Topic Prefix: $TOPIC_PREFIX"
 echo "Partition Count: ${PARTITION_COUNT:-default}"
 echo "Replication Factor: ${REPLICATION_FACTOR:-default}"
 echo "Start Index: ${START_INDEX:-default}"
-echo "Topic Count: ${COUNT:-default}"
+echo "Round Count: ${ROUND_COUNT:-default}"
 echo "Interval (ms): ${INTERVAL:-default}"
+echo "Per Round Count: ${PER_ROUND_COUNT:-default}"
+echo "Use Batch: ${USE_BATCH:-default}"
 echo "Is Async: ${IS_ASYNC:-default}"
 echo "Full Command: $JAVA_CMD"
 echo "==========================================="

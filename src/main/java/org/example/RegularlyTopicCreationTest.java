@@ -17,6 +17,7 @@ import picocli.CommandLine.Parameters;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.ExecutionException;
@@ -45,12 +46,20 @@ public class RegularlyTopicCreationTest implements Runnable {
     private int startIndex = 0;
 
     @Getter
-    @Option(names = {"-c", "--count"}, description = "Number of topics. It will be used with topicPrefix and startIndex. Default: 10")
-    private int count = 10;
+    @Option(names = {"-n", "--round-count"}, description = "Number of topics. It will be used with topicPrefix and startIndex. Default: 10")
+    private int roundCount = 10;
 
     @Getter
     @Option(names = {"-i", "--interval"}, description = "Interval of topic deletion in milli seconds. Default: 1000")
     private int interval = 1000;
+
+    @Getter
+    @Option(names = {"-N", "--per-round-count"}, description = "Number of topics in each round. It will be used with topicPrefix and startIndex. Default: 10")
+    private int perRoundCount = 10;
+
+    @Getter
+    @Option(names = {"-B", "--use-batch"}, description = "If true, topic creation will be batched for each round. Default: false")
+    private boolean useBatch = false;
 
     @Getter
     @Option(names = {"-a", "--is-async"}, description = "If true, topic creation will be done asynchronously. Default: false")
@@ -76,10 +85,16 @@ public class RegularlyTopicCreationTest implements Runnable {
 
         Properties props = createAdminClientConfig();
         try (AdminClient adminClient = KafkaAdminClient.create(props)) {
-            for (int i = 0; i < count; i++) {
+            int totalCnt = 0;
+            for (int i = 0; i < roundCount; i++) {
                 long startTimestamp = System.currentTimeMillis();
-                String topicName = topicPrefix + (startIndex + i);
-                doCreateTopic(adminClient, topicName);
+                List<String> topicNames = new ArrayList<>();
+                for (int j = 0; j < perRoundCount; j++) {
+                    topicNames.add(topicPrefix + (startIndex + totalCnt));
+                    totalCnt += 1;
+                }
+                doCreateTopics(adminClient, topicNames);
+
                 try {
                     long elapsedTimeMs = System.currentTimeMillis() - startTimestamp;
                     Thread.sleep(Math.max(interval - (int) elapsedTimeMs, 0));
@@ -101,17 +116,61 @@ public class RegularlyTopicCreationTest implements Runnable {
         return props;
     }
 
+    private void doCreateTopics(AdminClient adminClient, List<String> topicNames) {
+        if (useBatch) {
+            doCreateTopicBatch(adminClient, topicNames);
+            return;
+        }
+
+        for (String topicName: topicNames) {
+            doCreateTopic(adminClient, topicName);
+        }
+    }
+
     private void doCreateTopic(AdminClient adminClient, String topicName) {
         addMonitorLog(topicName, "REQUESTED");
         KafkaFuture<Void> future = adminClient.createTopics(
                 List.of(new NewTopic(topicName, partitionCount, replicationFactor))
         ).all();
-        if (!isAsync) {
-            try {
-                future.get(); // Wait for the deletion to complete if not async
-                addMonitorLog(topicName, "RESPONDED");
-            } catch (InterruptedException | ExecutionException e) {
-                addMonitorLog(topicName, "FAILED");
+        if (isAsync) return;
+
+        try {
+            future.get(); // Wait for the creation to complete if not async
+            addMonitorLog(topicName, "RESPONDED");
+        } catch (InterruptedException | ExecutionException e) {
+            addMonitorLog(topicName, "FAILED");
+        }
+    }
+
+    private void doCreateTopicBatch(AdminClient adminClient, List<String> topicNames) {
+        long stTimestamp = System.currentTimeMillis();
+        long stTimestampNano = System.nanoTime();
+
+        List<NewTopic> topics = topicNames.stream().map(
+                t -> new NewTopic(t, partitionCount, replicationFactor)
+        ).toList();
+        KafkaFuture<Void> future = adminClient.createTopics(topics).all();
+        if (isAsync) {
+            for (String topicName: topicNames) {
+                addMonitorLog(topicName, "REQUESTED", stTimestamp, stTimestampNano);
+            }
+            return;
+        }
+
+        try {
+            future.get(); // Wait for the creation to complete if not async
+            long enTimestamp = System.currentTimeMillis();
+            long enTimestampNano = System.nanoTime();
+            for (String topicName: topicNames) {
+                addMonitorLog(topicName, "REQUESTED", stTimestamp, stTimestampNano);
+                addMonitorLog(topicName, "RESPONDED", enTimestamp, enTimestampNano);
+            }
+        } catch (InterruptedException | ExecutionException e) {
+            long enTimestamp = System.currentTimeMillis();
+            long enTimestampNano = System.nanoTime();
+            for (String topicName: topicNames) {
+                addMonitorLog(topicName, "REQUESTED", stTimestamp, stTimestampNano);
+                addMonitorLog(topicName, "FAILED", enTimestamp, enTimestampNano);
             }
         }
     }
@@ -123,6 +182,17 @@ public class RegularlyTopicCreationTest implements Runnable {
                 "CREATE_TOPIC",
                 topicName,
                 state,
+                timestamp,
+                timestampNano
+        ));
+        monitorLogWriter.notifyIfNeeded();
+    }
+
+    private void addMonitorLog(String topicName, String status, long timestamp, long timestampNano) {
+        monitoringQueue.enqueue(new MonitorLog(
+                "CREATE_TOPIC",
+                topicName,
+                status,
                 timestamp,
                 timestampNano
         ));
