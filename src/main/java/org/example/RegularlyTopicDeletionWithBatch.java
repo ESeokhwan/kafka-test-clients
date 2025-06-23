@@ -49,8 +49,8 @@ public class RegularlyTopicDeletionWithBatch implements Runnable {
     private int perRoundCount = 10;
 
     @Getter
-    @Option(names = {"-B", "--use-batch"}, description = "If true, topic deletion will be batched for each round. Default: true")
-    private boolean useBatch = true;
+    @Option(names = {"-B", "--use-batch"}, description = "If true, topic deletion will be batched for each round. Default: false")
+    private boolean useBatch = false;
 
     @Getter
     @Option(names = {"-a", "--is-async"}, description = "If true, topic creation will be done asynchronously. Default: false")
