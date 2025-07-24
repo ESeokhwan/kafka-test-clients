@@ -59,14 +59,15 @@ public class IntersectionSimulationTopicDeleter implements Runnable {
         init();
 
         Random randomEngine = new Random();
+        int nextStartIndex = startIndex;
         for (int i = 0; i < roundCount; i++) {
-            f(1_000, 50_000, randomEngine);
-            f(200, 10_000, randomEngine);
+            nextStartIndex = f(1_000, 50_000, nextStartIndex, randomEngine);
+            nextStartIndex = f(200, 10_000, nextStartIndex, randomEngine);
         }
         cleanupLogWriter();
     }
 
-    private void f(int interval, int runningTime, Random randomEngine) {
+    private int f(int interval, int runningTime, int startIndex, Random randomEngine) {
         List<Integer> intervalNoises = NoiseUtils.generateNoiseList(
                 interval * 0.3,
                 interval / 2,
@@ -75,14 +76,14 @@ public class IntersectionSimulationTopicDeleter implements Runnable {
         );
 
         Properties props = createAdminClientConfig();
+        int totalCnt = startIndex;
         try (AdminClient adminClient = KafkaAdminClient.create(props)) {
-            int totalCnt = 0;
             long endTime = TimeUtils.getAccurateCurrentTimeMillis() + runningTime;
             for (int i = 0; true; i++) {
                 if (TimeUtils.getAccurateCurrentTimeMillis() >= endTime) break;
                 long startTimestamp = TimeUtils.getAccurateCurrentTimeMillis();
                 List<String> topicNames = new ArrayList<>();
-                topicNames.add(topicPrefix + (startIndex + totalCnt));
+                topicNames.add(topicPrefix + totalCnt);
                 totalCnt += 1;
                 doDeleteTopics(adminClient, topicNames);
 
@@ -98,6 +99,7 @@ public class IntersectionSimulationTopicDeleter implements Runnable {
         } catch (Exception e) {
             log.error("Failed to create AdminClient", e);
         }
+        return totalCnt;
     }
 
     private void init() {
