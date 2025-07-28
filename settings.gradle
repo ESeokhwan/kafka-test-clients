@@ -9,7 +9,7 @@ pluginManagement {
     }
 }
 
-rootProject.name = 'kafka_test_clients'
+rootProject.name = 'kafka-test-clients'
 
 // Base programs
 include 'core', 'apps'
