@@ -1,34 +1,59 @@
 plugins {
-    id 'java'
-    id 'io.freefair.lombok' version '8.2.2'
-    id 'com.github.johnrengelman.shadow' version '8.1.1'
+    id 'com.github.johnrengelman.shadow' apply false
 }
 
-lombok {
-    version = "1.18.38"
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
+allprojects {
+    group 'org.example'
+    version '1.0-SNAPSHOT'
+
+    repositories {
+        mavenCentral()
+    }
 }
 
-group 'org.example'
-version '1.0-SNAPSHOT'
+subprojects {
+    apply plugin: 'java'
 
-repositories {
-    mavenCentral()
-}
+    sourceCompatibility = '17'
+    targetCompatibility = '17'
 
-dependencies {
-    implementation fileTree(dir: 'kafka-clients/clients/build/libs', include: ['kafka-clients*.jar'])
-    implementation fileTree(dir: 'moniq/build/libs', include: ['moniq*.jar'])
+    group 'org.example'
+    version '1.0-SNAPSHOT'
 
-    implementation 'info.picocli:picocli-codegen:4.7.4'
-    implementation 'org.slf4j:slf4j-api:2.0.7'
-    implementation 'org.apache.logging.log4j:log4j-slf4j2-impl:2.24.3'
-    implementation 'org.apache.logging.log4j:log4j-api:2.24.3'
-    implementation 'org.apache.logging.log4j:log4j-core:2.24.3'
-    implementation 'org.apache.poi:poi-ooxml:5.4.0'
-    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.8.1'
-    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.8.1'
-}
+    repositories {
+        mavenCentral()
+    }
 
-test {
-    useJUnitPlatform()
+    dependencies {
+        implementation 'moniq:moniq'
+
+        implementation 'org.apache.kafka:kafka-clients:3.9.1'
+        implementation 'org.slf4j:slf4j-api:2.0.7'
+        implementation 'org.apache.logging.log4j:log4j-slf4j2-impl:2.24.3'
+        implementation 'org.apache.logging.log4j:log4j-api:2.24.3'
+        implementation 'org.apache.logging.log4j:log4j-core:2.24.3'
+        implementation 'org.apache.poi:poi-ooxml:5.4.0'
+
+        testImplementation 'org.junit.jupiter:junit-jupiter-api:5.8.1'
+        testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.8.1'
+    }
+
+    plugins.withId('com.github.johnrengelman.shadow') {
+        tasks.withType(ShadowJar).tap {
+            configureEach {
+                destinationDirectory = file("$rootDir/build/libs")
+                archiveBaseName = project.path.substring(1).replace(':', '.')
+            }
+        }
+    }
+
+    test {
+        useJUnitPlatform()
+    }
+
+    tasks.named('clean', Delete) {
+        delete "$rootDir/build"
+    }
 }

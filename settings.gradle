@@ -1,2 +1,41 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+    plugins {
+        id 'io.freefair.lombok' version '8.6'
+        id 'com.github.johnrengelman.shadow' version '8.1.1'
+    }
+}
+
 rootProject.name = 'kafka_test_clients'
 
+// Base programs
+include 'core', 'apps'
+
+// sandbox programs
+include 'sandbox:legacy'
+
+def localSettings = new File(settingsDir, 'local.settings.gradle')
+
+if (localSettings.exists()) {
+    apply from: localSettings
+} else {
+    println "> No local settings detected. Using standard remote dependencies"
+}
+
+if (settings.hasProperty('CUSTOM_KAFKA_PATH')) {
+    println "> Including custom kafka build from: ${CUSTOM_KAFKA_PATH}"
+    includeBuild(CUSTOM_KAFKA_PATH) {
+        dependencySubstitution {
+            substitute module('org.apache.kafka:kafka-clients') using project(':clients')
+            substitute module('org.apache.kafka:kafka-streams') using project(':streams')
+        }
+    }
+}
+
+if (settings.hasProperty('CUSTOM_MONIQ_PATH')) {
+    println "> Including custom kafka build from: ${CUSTOM_MONIQ_PATH}"
+    includeBuild(CUSTOM_MONIQ_PATH)
+}
