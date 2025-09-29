@@ -9,7 +9,7 @@ import moniq.writer.strategy.ScrapableWriteStrategy;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.KafkaAdminClient;
 import org.apache.kafka.clients.producer.Callback;
-import org.apache.kafka.clients.producer.KafkaTransientTopicProducer;
+import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
@@ -29,7 +29,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
-public class TransientTopicProduceDeleteTest implements Runnable {
+public class NormalTopicProduceDeleteTest implements Runnable {
 
     @Getter
     @Option(names = {"-b", "--brokers"}, required = true, description = "Kafka Brokers (comma-separated list)")
@@ -69,7 +69,7 @@ public class TransientTopicProduceDeleteTest implements Runnable {
 
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
-    public TransientTopicProduceDeleteTest() {
+    public NormalTopicProduceDeleteTest() {
         super();
     }
 
@@ -88,7 +88,7 @@ public class TransientTopicProduceDeleteTest implements Runnable {
         Properties props = createProducerConfig();
         for (int i = 0; i < groupCount; i++) {
             String topicName = prefix + "_" + String.valueOf(i);
-            try (Producer<String, String> producer = new KafkaTransientTopicProducer<>(props)) {
+            try (Producer<String, String> producer = new KafkaProducer<>(props)) {
                 for (int j = 0; j < perGroupCount; j++) {
                     long startTimestamp = TimeUtils.getAccurateCurrentTimeMillis();
                     String messageId = topicName + "_" + j;
@@ -166,7 +166,7 @@ public class TransientTopicProduceDeleteTest implements Runnable {
                 Properties props = createAdminClientConfig();
                 try (AdminClient adminClient = KafkaAdminClient.create(props)) {
                     addMonitorLog("TOPIC_DELETE", topic, "REQUESTED");
-                    adminClient.deleteTransientTopics(List.of(topic)).all().get();
+                    adminClient.deleteTopics(List.of(topic)).all().get();
                     addMonitorLog("TOPIC_DELETE", topic, "RESPONDED");
                 } catch (Exception e) {
                     log.error("Failed to create AdminClient", e);
@@ -228,7 +228,7 @@ public class TransientTopicProduceDeleteTest implements Runnable {
         String pid = rt.getName();
         ThreadContext.put("PID", pid);
 
-        new CommandLine(new TransientTopicProduceDeleteTest())
+        new CommandLine(new NormalTopicProduceDeleteTest())
                 .execute(args);
     }
 }
