@@ -12,7 +12,7 @@ pluginManagement {
 rootProject.name = 'kafka-test-clients'
 
 // Base programs
-include 'core', 'apps'
+include 'core', 'apps', 'sandbox'
 
 // sandbox programs
 include 'sandbox:legacy'
