@@ -52,6 +52,10 @@ public class NormalTopicProduceDeleteTest implements Runnable {
     private int groupCount = 10;
 
     @Getter
+    @Option(names = {"--per-group-count"}, description = "Number of messages in each group. Default: 1")
+    private int perGroupCount = 1;
+
+    @Getter
     @Option(names = {"-a", "--is-async"}, description = "If true, topic creation will be done asynchronously. Default: false")
     private boolean isAsync = false;
 
@@ -77,7 +81,7 @@ public class NormalTopicProduceDeleteTest implements Runnable {
         List<Integer> intervalNoises = NoiseUtils.generateNoiseList(
                 noiseStddev,
                 interval / 2,
-                Math.min(groupCount, NoiseUtils.MAX_NOISE_LIST_LENGTH),
+                Math.min(groupCount * perGroupCount, NoiseUtils.MAX_NOISE_LIST_LENGTH),
                 randomEngine
         );
 
@@ -85,20 +89,22 @@ public class NormalTopicProduceDeleteTest implements Runnable {
         for (int i = 0; i < groupCount; i++) {
             String topicName = prefix + "_" + i;
             try (Producer<String, String> producer = new KafkaProducer<>(props)) {
-                long startTimestamp = TimeUtils.getAccurateCurrentTimeMillis();
-                String messageId = topicName;
-                ProducerRecord<String, String> record = new ProducerRecord<>(topicName, messageId);
-                addMonitorLog("PRODUCE", messageId, "REQUESTED");
-                if (isAsync) producer.send(record, new BasicProducerCallback(record));
-                else producer.send(record, new BasicProducerCallback(record)).get();
+                for (int j = 0; j < perGroupCount; j++) {
+                    long startTimestamp = TimeUtils.getAccurateCurrentTimeMillis();
+                    String messageId = topicName + "_" + j;
+                    ProducerRecord<String, String> record = new ProducerRecord<>(topicName, messageId);
+                    addMonitorLog("PRODUCE", messageId, "REQUESTED");
+                    if (isAsync) producer.send(record, new BasicProducerCallback(record, j == perGroupCount - 1));
+                    else producer.send(record, new BasicProducerCallback(record, j == perGroupCount - 1)).get();
 
-                long elapsedTimeMs = TimeUtils.getAccurateCurrentTimeMillis() - startTimestamp;
-                long curInterval = interval + intervalNoises.get(i % intervalNoises.size());
-                try {
-                    Thread.sleep(Math.max(curInterval - (int) elapsedTimeMs, 0));
-                } catch (InterruptedException e) {
-                    log.error("Thread interrupted during sleep", e);
-                    Thread.currentThread().interrupt();
+                    long elapsedTimeMs = TimeUtils.getAccurateCurrentTimeMillis() - startTimestamp;
+                    long curInterval = interval + intervalNoises.get((i * perGroupCount + j) % intervalNoises.size());
+                    try {
+                        Thread.sleep(Math.max(curInterval - (int) elapsedTimeMs, 0));
+                    } catch (InterruptedException e) {
+                        log.error("Thread interrupted during sleep", e);
+                        Thread.currentThread().interrupt();
+                    }
                 }
             } catch (Exception e) {
                 log.error("Failed to create AdminClient", e);
@@ -139,9 +145,11 @@ public class NormalTopicProduceDeleteTest implements Runnable {
     public class BasicProducerCallback implements Callback {
 
         private final ProducerRecord<String, String> record;
+        private final boolean needTopicDelete;
 
-        public BasicProducerCallback(ProducerRecord<String, String> record) {
+        public BasicProducerCallback(ProducerRecord<String, String> record, boolean needTopicDelete) {
             this.record = record;
+            this.needTopicDelete = needTopicDelete;
         }
 
         @Override
@@ -155,6 +163,7 @@ public class NormalTopicProduceDeleteTest implements Runnable {
             addMonitorLog("PRODUCE", messageId, "RESPONDED");
             monitorLogWriter.notifyIfNeeded();
 
+            if (!needTopicDelete) return;
             String topic = record.topic();
             scheduler.schedule(() -> {
                 Properties props = createAdminClientConfig();
