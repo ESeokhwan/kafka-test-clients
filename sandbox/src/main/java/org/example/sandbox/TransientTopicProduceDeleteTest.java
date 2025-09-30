@@ -52,10 +52,6 @@ public class TransientTopicProduceDeleteTest implements Runnable {
     private int groupCount = 10;
 
     @Getter
-    @Option(names = "--per-group-count", description = "Number of messages in each group. Default: 1")
-    private int perGroupCount = 1;
-
-    @Getter
     @Option(names = {"-a", "--is-async"}, description = "If true, topic creation will be done asynchronously. Default: false")
     private boolean isAsync = false;
 
@@ -81,30 +77,28 @@ public class TransientTopicProduceDeleteTest implements Runnable {
         List<Integer> intervalNoises = NoiseUtils.generateNoiseList(
                 noiseStddev,
                 interval / 2,
-                Math.min(perGroupCount * groupCount, NoiseUtils.MAX_NOISE_LIST_LENGTH),
+                Math.min(groupCount, NoiseUtils.MAX_NOISE_LIST_LENGTH),
                 randomEngine
         );
 
         Properties props = createProducerConfig();
         for (int i = 0; i < groupCount; i++) {
-            String topicName = prefix + "_" + String.valueOf(i);
+            String topicName = prefix + "_" + i;
             try (Producer<String, String> producer = new KafkaTransientTopicProducer<>(props)) {
-                for (int j = 0; j < perGroupCount; j++) {
-                    long startTimestamp = TimeUtils.getAccurateCurrentTimeMillis();
-                    String messageId = topicName + "_" + j;
-                    ProducerRecord<String, String> record = new ProducerRecord<>(topicName, messageId);
-                    addMonitorLog("PRODUCE", messageId, "REQUESTED");
-                    if (isAsync) producer.send(record, new BasicProducerCallback(record));
-                    else producer.send(record, new BasicProducerCallback(record)).get();
+                long startTimestamp = TimeUtils.getAccurateCurrentTimeMillis();
+                String messageId = topicName;
+                ProducerRecord<String, String> record = new ProducerRecord<>(topicName, messageId);
+                addMonitorLog("PRODUCE", messageId, "REQUESTED");
+                if (isAsync) producer.send(record, new BasicProducerCallback(record));
+                else producer.send(record, new BasicProducerCallback(record)).get();
 
-                    long elapsedTimeMs = TimeUtils.getAccurateCurrentTimeMillis() - startTimestamp;
-                    long curInterval = interval + intervalNoises.get((i * perGroupCount + j) % intervalNoises.size());
-                    try {
-                        Thread.sleep(Math.max(curInterval - (int) elapsedTimeMs, 0));
-                    } catch (InterruptedException e) {
-                        log.error("Thread interrupted during sleep", e);
-                        Thread.currentThread().interrupt();
-                    }
+                long elapsedTimeMs = TimeUtils.getAccurateCurrentTimeMillis() - startTimestamp;
+                long curInterval = interval + intervalNoises.get(i % intervalNoises.size());
+                try {
+                    Thread.sleep(Math.max(curInterval - (int) elapsedTimeMs, 0));
+                } catch (InterruptedException e) {
+                    log.error("Thread interrupted during sleep", e);
+                    Thread.currentThread().interrupt();
                 }
             } catch (Exception e) {
                 log.error("Failed to create AdminClient", e);
@@ -168,6 +162,7 @@ public class TransientTopicProduceDeleteTest implements Runnable {
                     addMonitorLog("TOPIC_DELETE", topic, "REQUESTED");
                     adminClient.deleteTransientTopics(List.of(topic)).all().get();
                     addMonitorLog("TOPIC_DELETE", topic, "RESPONDED");
+                    monitorLogWriter.notifyIfNeeded();
                 } catch (Exception e) {
                     log.error("Failed to create AdminClient", e);
                 }
