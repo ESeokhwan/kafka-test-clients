@@ -24,7 +24,6 @@ public class Service implements Closeable {
     private final String brokers;
     private final String clientId;
     private final String serviceName;
-    private final boolean forCreation;
     private final int msgCnt;
     private final int interval;
     private final boolean isSync;
@@ -43,14 +42,13 @@ public class Service implements Closeable {
     private final Producer<String, String> producer;
 
     public Service(
-            String brokers, String clientId, String serviceName, boolean forCreation, int msgCnt,
+            String brokers, String clientId, String serviceName, int msgCnt,
             int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, boolean isSync, boolean needFlush,
             boolean logEnabled, boolean msgTagged, IMessageAdaptor messageAdaptor, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
         this.brokers = brokers;
         this.clientId = clientId;
         this.serviceName = serviceName;
-        this.forCreation = forCreation;
         this.msgCnt = msgCnt;
         this.interval = interval;
         this.isSync = isSync;
@@ -82,12 +80,10 @@ public class Service implements Closeable {
 
     public void produce() {
         String coreMessage = serviceName + "_" + curIdx;
-        String topicName = serviceName;
-        if (forCreation) topicName = coreMessage;
         if (msgTagged) coreMessage = "R" + coreMessage; // TODO: use a better tagging strategy
         String message = messageAdaptor.generate(coreMessage);
 
-        ProducerRecord<String, String> record = new ProducerRecord<>(topicName, message);
+        ProducerRecord<String, String> record = new ProducerRecord<>(serviceName, message);
         if (logEnabled) logRequested(coreMessage);
         producer.send(record, new ProducerCallback(record));
         if (needFlush || isSync) producer.flush();

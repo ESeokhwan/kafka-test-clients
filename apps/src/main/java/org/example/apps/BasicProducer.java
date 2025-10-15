@@ -2,34 +2,22 @@ package org.example.apps;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import moniq.MonitorLog;
 import moniq.MonitorQueue;
 import moniq.util.IMessageAdaptor;
 import moniq.util.NaiveMessageGenerator;
 import moniq.writer.MonitorLogWriter;
 import moniq.writer.strategy.ScrapableWriteStrategy;
-import org.apache.kafka.clients.admin.AdminClient;
-import org.apache.kafka.clients.admin.KafkaAdminClient;
-import org.apache.kafka.clients.admin.NewTopic;
-import org.apache.kafka.common.KafkaFuture;
 import org.apache.logging.log4j.ThreadContext;
 import org.example.producer.ProducerRun;
 import org.example.producer.Service;
-import org.example.util.NoiseUtils;
-import org.example.util.TimeUtils;
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
 
-import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Properties;
-import java.util.Random;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 public class BasicProducer implements Runnable {
@@ -63,12 +51,18 @@ public class BasicProducer implements Runnable {
     private double intervalNoiseStddev = 0;
 
     @Getter
-    @Option(names = {"--msg-size", "-m"}, description = "Message size in bytes. Default: 1000")
-    private int msgSize = 1000;
+    @Option(names = {"--interval-btw-topic"}, description = "The interval between produce requests for each topics (ms)." +
+            " If this value is not -1, clients send produce requests serially, topic by topic. If it is -1," +
+            " clients send produce requests to all topics concurrently. Default: -1")
+    private int intervalBtwTopic = -1;
 
     @Getter
-    @Option(names = {"--for-creation"}, description = "Enable creation mode. Default: false")
-    private boolean forCreation = false;
+    @Option(names = {"--interval-noise-stddev-btw-topic"}, description = "Noise standard deviation of produce interval between topics (ms). Default: 0")
+    private double intervalNoiseStddevBtwTopic = 0;
+
+    @Getter
+    @Option(names = {"--msg-size", "-m"}, description = "Message size in bytes. Default: 1000")
+    private int msgSize = 1000;
 
     @Getter
     @Option(names = {"--is-sync"}, description = "If true, topic creation will be done synchronously. Default: false")
@@ -108,6 +102,11 @@ public class BasicProducer implements Runnable {
     private MonitorLogWriter monitorLogWriter;
     private Thread monitorLogWriterThread;
 
+    private final Thread emergencyCleanupHook = new Thread(() -> {
+        log.info("Shutdown hook triggered, exiting application.");
+        cleanup();
+    });
+
     public BasicProducer() {
         super();
     }
@@ -118,10 +117,6 @@ public class BasicProducer implements Runnable {
         ThreadContext.put("PID", pid);
 
         BasicProducer app = new BasicProducer();
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            log.info("Shutdown hook triggered, exiting application.");
-            app.cleanup();
-        }));
 
         new CommandLine(app).execute(args);
     }
@@ -145,9 +140,11 @@ public class BasicProducer implements Runnable {
         }
         log.info("Allez!");
         startSignal.countDown();
+        waitAndCleanup();
     }
 
     private void init() {
+        Runtime.getRuntime().addShutdownHook(emergencyCleanupHook);
         initMonitor();
         initProducers();
     }
@@ -172,7 +169,6 @@ public class BasicProducer implements Runnable {
                         brokers,
                         prefix + "_" + i,
                         prefix + "_" + i + "_" + j,
-                        forCreation,
                         msgCntPerTopic,
                         interval,
                         intervalNoiseStddev,
@@ -186,8 +182,27 @@ public class BasicProducer implements Runnable {
                         monitorLogWriter
                 ));
             }
-            producersByClients.add(new ProducerRun(services, startSignal));
+            producersByClients.add(new ProducerRun(
+                    services, intervalBtwTopic, intervalNoiseStddevBtwTopic,
+                    intervalBtwTopic / 2, startSignal)
+            );
         }
+    }
+
+    private void waitAndCleanup() {
+        joinProducers();
+        cleanupLogWriter();
+        Runtime.getRuntime().removeShutdownHook(emergencyCleanupHook);
+    }
+
+    private void cleanup() {
+        cleanupProducers();
+        cleanupLogWriter();
+    }
+
+    private void cleanupProducers() {
+        for (ProducerRun producer : producersByClients) producer.close();
+        joinProducers();
     }
 
     private void joinProducers() {
@@ -199,22 +214,6 @@ public class BasicProducer implements Runnable {
                 Thread.currentThread().interrupt();
             }
         }
-    }
-
-    private void cleanup() {
-        cleanupProducers();
-        cleanupLogWriter();
-    }
-
-    private void cleanupProducers() {
-        for (ProducerRun producer : producersByClients) {
-            try {
-                producer.close();
-            } catch (IOException e) {
-                log.error("Failed to close producer", e);
-            }
-        }
-        joinProducers();
     }
 
     private void cleanupLogWriter() {
