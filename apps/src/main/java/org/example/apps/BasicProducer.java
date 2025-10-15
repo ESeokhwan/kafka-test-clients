@@ -47,12 +47,12 @@ public class BasicProducer implements Runnable {
     private int clientCnt = 1;
 
     @Getter
-    @Option(names = {"--service-cnt"}, description = "Number of services. Default: 1")
-    private int serviceCnt = 1;
+    @Option(names = {"--topic-cnt-per-client"}, description = "Number of topics per each client. Default: 1")
+    private int topicCntPerClient = 1;
 
     @Getter
-    @Option(names = {"--round-cnt", "-n"}, description = "Number of rounds of each producer and service. Default: 1")
-    private int roundCnt = 1;
+    @Option(names = {"--msg-cnt-per-topic", "-n"}, description = "Number of messages of each client and topics. Default: 1")
+    private int msgCntPerTopic = 1;
 
     @Getter
     @Option(names = {"--interval", "-i"}, description = "Produce interval (ms). Default: 1000")
@@ -167,13 +167,13 @@ public class BasicProducer implements Runnable {
     private void initProducers() {
         for (int i = 0; i < clientCnt; i++) {
             List<Service> services = new ArrayList<>();
-            for (int j = 0; j < serviceCnt; j++) {
+            for (int j = 0; j < topicCntPerClient; j++) {
                 services.add(new Service(
                         brokers,
                         prefix + "_" + i,
                         prefix + "_" + i + "_" + j,
                         forCreation,
-                        roundCnt,
+                        msgCntPerTopic,
                         interval,
                         intervalNoiseStddev,
                         interval / 2,
