@@ -2,11 +2,8 @@ package org.example.apps;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import moniq.MonitorQueue;
 import moniq.util.IMessageAdaptor;
 import moniq.util.NaiveMessageGenerator;
-import moniq.writer.MonitorLogWriter;
-import moniq.writer.strategy.ScrapableWriteStrategy;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.logging.log4j.ThreadContext;
@@ -23,10 +20,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 import java.util.Random;
-import java.util.concurrent.CountDownLatch;
 
 @Slf4j
-public class BasicProducer implements Runnable {
+public class BasicProducer extends AbstractCommand implements Runnable {
 
     @Getter
     @Option(names = {"-b", "--brokers"}, required = true, description = "Kafka Brokers (comma-separated list)")
@@ -110,20 +106,16 @@ public class BasicProducer implements Runnable {
     @Option(names = "--monitoring-batch-size", description = "Batch size for monitoring log writing. Default: 10,000,000")
     private int monitoringBatchSize = 10_000_000;
 
-    private final CountDownLatch startSignal = new CountDownLatch(1);
-
     private final List<ServicesRunner> producersByClients = new ArrayList<>();
     private final List<Thread> producerThreads = new ArrayList<>();
     private final List<Producer<String, String>> sharedProducers = new ArrayList<>();
 
     private IMessageAdaptor messageAdaptor;
-    private MonitorQueue monitoringQueue;
-    private MonitorLogWriter monitorLogWriter;
-    private Thread monitorLogWriterThread;
 
     private final Thread emergencyCleanupHook = new Thread(() -> {
         log.info("Shutdown hook triggered, exiting application.");
-        cleanup();
+        cleanupProducers();
+        cleanupMonitor();
     });
 
     public BasicProducer() {
@@ -142,43 +134,27 @@ public class BasicProducer implements Runnable {
 
     @Override
     public void run() {
-        init();
+        Runtime.getRuntime().addShutdownHook(emergencyCleanupHook);
+        initMonitor(monitoringBatchSize);
+        messageAdaptor = new NaiveMessageGenerator(msgSize, Math.min(msgSize, 1000));
+        initServices();
+        startBarrier(startBarrierDelay);
+
+        joinProducers();
+        for (Producer<String, String> producer: sharedProducers) producer.close();
+        cleanupMonitor();
+        Runtime.getRuntime().removeShutdownHook(emergencyCleanupHook);
+    }
+
+    private void initServices() {
+        if (shareProducer) initSharingProdServices();
+        else initStandaloneServices();
 
         for (ServicesRunner producer: producersByClients) {
             Thread thread = new Thread(producer);
             producerThreads.add(thread);
             thread.start();
         }
-
-        try {
-            log.info("En Garde...");
-            Thread.sleep(startBarrierDelay);
-        } catch (InterruptedException e) {
-            log.error("Thread interrupted during sleep", e);
-            Thread.currentThread().interrupt();
-        }
-        log.info("Allez!");
-        startSignal.countDown();
-        waitAndCleanup();
-    }
-
-    private void init() {
-        Runtime.getRuntime().addShutdownHook(emergencyCleanupHook);
-        initMonitor();
-        if (shareProducer) initSharingProdServices();
-        else initStandaloneServices();
-    }
-
-    private void initMonitor() {
-        messageAdaptor = new NaiveMessageGenerator(msgSize, Math.min(msgSize, 1000));
-        monitoringQueue = new MonitorQueue();
-        monitorLogWriter = new MonitorLogWriter(
-                monitoringQueue,
-                new ScrapableWriteStrategy(System.out),
-                monitoringBatchSize
-        );
-        monitorLogWriterThread = new Thread(monitorLogWriter);
-        monitorLogWriterThread.start();
     }
 
     private void initStandaloneServices() {
@@ -286,18 +262,6 @@ public class BasicProducer implements Runnable {
         }
     }
 
-    private void waitAndCleanup() {
-        joinProducers();
-        for (Producer<String, String> producer: sharedProducers) producer.close();
-        cleanupLogWriter();
-        Runtime.getRuntime().removeShutdownHook(emergencyCleanupHook);
-    }
-
-    private void cleanup() {
-        cleanupProducers();
-        cleanupLogWriter();
-    }
-
     private void cleanupProducers() {
         for (ServicesRunner producer : producersByClients) {
             try {
@@ -318,18 +282,6 @@ public class BasicProducer implements Runnable {
                 log.error("Thread interrupted during join", e);
                 Thread.currentThread().interrupt();
             }
-        }
-    }
-
-    private void cleanupLogWriter() {
-        if (monitorLogWriter == null) return;
-
-        monitorLogWriter.gracefulShutdown();
-        monitorLogWriter.syncedNotify();
-        try {
-            monitorLogWriterThread.join();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
         }
     }
 }
