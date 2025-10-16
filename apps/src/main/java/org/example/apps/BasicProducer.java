@@ -2,21 +2,14 @@ package org.example.apps;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import moniq.MonitorLog;
-import moniq.MonitorQueue;
 import moniq.util.IMessageAdaptor;
 import moniq.util.NaiveMessageGenerator;
-import moniq.writer.MonitorLogWriter;
-import moniq.writer.strategy.ScrapableWriteStrategy;
-import org.apache.kafka.clients.admin.AdminClient;
-import org.apache.kafka.clients.admin.KafkaAdminClient;
-import org.apache.kafka.clients.admin.NewTopic;
-import org.apache.kafka.common.KafkaFuture;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.logging.log4j.ThreadContext;
-import org.example.producer.ProducerRun;
-import org.example.producer.Service;
-import org.example.util.NoiseUtils;
-import org.example.util.TimeUtils;
+import org.example.core.IService;
+import org.example.core.ServicesRunner;
+import org.example.core.producer.ProducerService;
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
 
@@ -27,12 +20,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 import java.util.Random;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
-public class BasicProducer implements Runnable {
+public class BasicProducer extends AbstractCommand implements Runnable {
 
     @Getter
     @Option(names = {"-b", "--brokers"}, required = true, description = "Kafka Brokers (comma-separated list)")
@@ -47,12 +37,12 @@ public class BasicProducer implements Runnable {
     private int clientCnt = 1;
 
     @Getter
-    @Option(names = {"--service-cnt"}, description = "Number of services. Default: 1")
-    private int serviceCnt = 1;
+    @Option(names = {"--topic-cnt-per-client"}, description = "Number of topics per each client. Default: 1")
+    private int topicCntPerClient = 1;
 
     @Getter
-    @Option(names = {"--round-cnt", "-n"}, description = "Number of rounds of each producer and service. Default: 1")
-    private int roundCnt = 1;
+    @Option(names = {"--msg-cnt-per-topic", "-n"}, description = "Number of messages of each client and topics. Default: 1")
+    private int msgCntPerTopic = 1;
 
     @Getter
     @Option(names = {"--interval", "-i"}, description = "Produce interval (ms). Default: 1000")
@@ -63,12 +53,18 @@ public class BasicProducer implements Runnable {
     private double intervalNoiseStddev = 0;
 
     @Getter
-    @Option(names = {"--msg-size", "-m"}, description = "Message size in bytes. Default: 1000")
-    private int msgSize = 1000;
+    @Option(names = {"--interval-btw-topic"}, description = "The interval between produce requests for each topics (ms)." +
+            " If this value is not -1, clients send produce requests serially, topic by topic. If it is -1," +
+            " clients send produce requests to all topics concurrently. Default: -1")
+    private int intervalBtwTopic = -1;
 
     @Getter
-    @Option(names = {"--for-creation"}, description = "Enable creation mode. Default: false")
-    private boolean forCreation = false;
+    @Option(names = {"--interval-noise-stddev-btw-topic"}, description = "Noise standard deviation of produce interval between topics (ms). Default: 0")
+    private double intervalNoiseStddevBtwTopic = 0;
+
+    @Getter
+    @Option(names = {"--msg-size", "-m"}, description = "Message size in bytes. Default: 1000")
+    private int msgSize = 1000;
 
     @Getter
     @Option(names = {"--is-sync"}, description = "If true, topic creation will be done synchronously. Default: false")
@@ -91,6 +87,18 @@ public class BasicProducer implements Runnable {
     private boolean scrapable = false;
 
     @Getter
+    @Option(names = {"--share-producer"}, description = "If true, KafkaProducer instances will be shared among topics in each client. Default: false")
+    private boolean shareProducer = false;
+
+    @Getter
+    @Option(names = {"--warmup-cnt"}, description = "Warm-up count before measurement. Default: 0")
+    private int warmupCnt = 0;
+
+    @Getter
+    @Option(names = {"--warmup-topic"}, description = "Topic name for warm-up. Default: test_warmup")
+    private String warmupTopic = "test_warmup";
+
+    @Getter
     @Option(names = {"--start-barrier-delay"}, description = "Delay (ms) before starting the production. Default: 0")
     private int startBarrierDelay = 5000;
 
@@ -98,15 +106,17 @@ public class BasicProducer implements Runnable {
     @Option(names = "--monitoring-batch-size", description = "Batch size for monitoring log writing. Default: 10,000,000")
     private int monitoringBatchSize = 10_000_000;
 
-    private final CountDownLatch startSignal = new CountDownLatch(1);
-
-    private final List<ProducerRun> producersByClients = new ArrayList<>();
+    private final List<ServicesRunner> producersByClients = new ArrayList<>();
     private final List<Thread> producerThreads = new ArrayList<>();
+    private final List<Producer<String, String>> sharedProducers = new ArrayList<>();
 
     private IMessageAdaptor messageAdaptor;
-    private MonitorQueue monitoringQueue;
-    private MonitorLogWriter monitorLogWriter;
-    private Thread monitorLogWriterThread;
+
+    private final Thread emergencyCleanupHook = new Thread(() -> {
+        log.info("Shutdown hook triggered, exiting application.");
+        cleanupProducers();
+        cleanupMonitor();
+    });
 
     public BasicProducer() {
         super();
@@ -118,65 +128,49 @@ public class BasicProducer implements Runnable {
         ThreadContext.put("PID", pid);
 
         BasicProducer app = new BasicProducer();
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            log.info("Shutdown hook triggered, exiting application.");
-            app.cleanup();
-        }));
 
         new CommandLine(app).execute(args);
     }
 
     @Override
     public void run() {
-        init();
+        Runtime.getRuntime().addShutdownHook(emergencyCleanupHook);
+        initMonitor(monitoringBatchSize);
+        messageAdaptor = new NaiveMessageGenerator(msgSize, Math.min(msgSize, 1000));
+        initServices();
+        startBarrier(startBarrierDelay);
 
-        for (ProducerRun producer: producersByClients) {
+        joinProducers();
+        for (Producer<String, String> producer: sharedProducers) producer.close();
+        cleanupMonitor();
+        Runtime.getRuntime().removeShutdownHook(emergencyCleanupHook);
+    }
+
+    private void initServices() {
+        if (shareProducer) initSharingProdServices();
+        else initStandaloneServices();
+
+        for (ServicesRunner producer: producersByClients) {
             Thread thread = new Thread(producer);
             producerThreads.add(thread);
             thread.start();
         }
-
-        try {
-            log.info("En Garde...");
-            Thread.sleep(startBarrierDelay);
-        } catch (InterruptedException e) {
-            log.error("Thread interrupted during sleep", e);
-            Thread.currentThread().interrupt();
-        }
-        log.info("Allez!");
-        startSignal.countDown();
     }
 
-    private void init() {
-        initMonitor();
-        initProducers();
-    }
-
-    private void initMonitor() {
-        messageAdaptor = new NaiveMessageGenerator(msgSize, Math.min(msgSize, 1000));
-        monitoringQueue = new MonitorQueue();
-        monitorLogWriter = new MonitorLogWriter(
-                monitoringQueue,
-                new ScrapableWriteStrategy(System.out),
-                monitoringBatchSize
-        );
-        monitorLogWriterThread = new Thread(monitorLogWriter);
-        monitorLogWriterThread.start();
-    }
-
-    private void initProducers() {
+    private void initStandaloneServices() {
+        Random randomEngine = new Random();
         for (int i = 0; i < clientCnt; i++) {
-            List<Service> services = new ArrayList<>();
-            for (int j = 0; j < serviceCnt; j++) {
-                services.add(new Service(
+            List<IService> services = new ArrayList<>();
+            for (int j = 0; j < topicCntPerClient; j++) {
+                services.add(new ProducerService(
                         brokers,
                         prefix + "_" + i,
                         prefix + "_" + i + "_" + j,
-                        forCreation,
-                        roundCnt,
+                        msgCntPerTopic,
                         interval,
                         intervalNoiseStddev,
                         interval / 2,
+                        randomEngine,
                         isSync,
                         needFlush,
                         (!sampleLog || i == 0),
@@ -186,8 +180,98 @@ public class BasicProducer implements Runnable {
                         monitorLogWriter
                 ));
             }
-            producersByClients.add(new ProducerRun(services, startSignal));
+            IService warmupService = new ProducerService(
+                    brokers,
+                    "warmup_" + i,
+                    warmupTopic,
+                    warmupCnt,
+                    0,
+                    0,
+                    0,
+                    randomEngine,
+                    false,
+                    true,
+                    false,
+                    false,
+                    messageAdaptor,
+                    monitoringQueue,
+                    monitorLogWriter
+            );
+            producersByClients.add(new ServicesRunner(
+                    services,
+                    warmupService,
+                    intervalBtwTopic,
+                    intervalNoiseStddevBtwTopic,
+                    intervalBtwTopic / 2,
+                    randomEngine,
+                    startSignal
+            ));
         }
+    }
+
+    private void initSharingProdServices() {
+        Random randomEngine = new Random();
+        for (int i = 0; i < clientCnt; i++) {
+            List<IService> services = new ArrayList<>();
+            Properties properties = ProducerService.createProducerConfig(brokers, prefix + "_" + i, isSync);
+            Producer<String, String> producer = new KafkaProducer<>(properties);
+            sharedProducers.add(producer);
+            for (int j = 0; j < topicCntPerClient; j++) {
+                services.add(new ProducerService(
+                        producer,
+                        prefix + "_" + i + "_" + j,
+                        msgCntPerTopic,
+                        interval,
+                        intervalNoiseStddev,
+                        interval / 2,
+                        randomEngine,
+                        isSync,
+                        needFlush,
+                        (!sampleLog || i == 0),
+                        tagRecord,
+                        messageAdaptor,
+                        monitoringQueue,
+                        monitorLogWriter
+                ));
+            }
+            IService warmupService = new ProducerService(
+                    producer,
+                    warmupTopic,
+                    warmupCnt,
+                    0,
+                    0,
+                    0,
+                    randomEngine,
+                    false,
+                    true,
+                    false,
+                    false,
+                    messageAdaptor,
+                    monitoringQueue,
+                    monitorLogWriter
+            );
+            producersByClients.add(new ServicesRunner(
+                    services,
+                    warmupService,
+                    intervalBtwTopic,
+                    intervalNoiseStddevBtwTopic,
+                    intervalBtwTopic / 2,
+                    randomEngine,
+                    startSignal
+            ));
+        }
+    }
+
+    private void cleanupProducers() {
+        for (ServicesRunner producer : producersByClients) {
+            try {
+                producer.close();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        joinProducers();
+        for (Producer<String, String> producer: sharedProducers) producer.close();
     }
 
     private void joinProducers() {
@@ -198,34 +282,6 @@ public class BasicProducer implements Runnable {
                 log.error("Thread interrupted during join", e);
                 Thread.currentThread().interrupt();
             }
-        }
-    }
-
-    private void cleanup() {
-        cleanupProducers();
-        cleanupLogWriter();
-    }
-
-    private void cleanupProducers() {
-        for (ProducerRun producer : producersByClients) {
-            try {
-                producer.close();
-            } catch (IOException e) {
-                log.error("Failed to close producer", e);
-            }
-        }
-        joinProducers();
-    }
-
-    private void cleanupLogWriter() {
-        if (monitorLogWriter == null) return;
-
-        monitorLogWriter.gracefulShutdown();
-        monitorLogWriter.syncedNotify();
-        try {
-            monitorLogWriterThread.join();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
         }
     }
 }

@@ -1,4 +1,4 @@
-package org.example.producer;
+package org.example.core.producer;
 
 import lombok.extern.slf4j.Slf4j;
 import moniq.MonitorLog;
@@ -10,21 +10,18 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
-import org.example.util.NoiseUtils;
-import org.example.util.TimeUtils;
+import org.example.core.IService;
+import org.example.core.util.NoiseUtils;
+import org.example.core.util.Noises;
+import org.example.core.util.TimeUtils;
 
-import java.io.Closeable;
-import java.util.List;
 import java.util.Properties;
 import java.util.Random;
 
 @Slf4j
-public class Service implements Closeable {
+public class ProducerService implements IService {
 
-    private final String brokers;
-    private final String clientId;
-    private final String serviceName;
-    private final boolean forCreation;
+    private final String topicName;
     private final int msgCnt;
     private final int interval;
     private final boolean isSync;
@@ -37,20 +34,17 @@ public class Service implements Closeable {
     private final MonitorLogWriter monitorLogWriter;
 
     private int curIdx = 0;
-    private final List<Integer> noises;
+    private final Noises noises;
 
-    private final Properties producerProps;
     private final Producer<String, String> producer;
+    private final boolean needToCleanupProducer;
 
-    public Service(
-            String brokers, String clientId, String serviceName, boolean forCreation, int msgCnt,
-            int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, boolean isSync, boolean needFlush,
+    public ProducerService(
+            String brokers, String clientId, String topicName, int msgCnt,
+            int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, boolean isSync, boolean needFlush,
             boolean logEnabled, boolean msgTagged, IMessageAdaptor messageAdaptor, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
-        this.brokers = brokers;
-        this.clientId = clientId;
-        this.serviceName = serviceName;
-        this.forCreation = forCreation;
+        this.topicName = topicName;
         this.msgCnt = msgCnt;
         this.interval = interval;
         this.isSync = isSync;
@@ -61,17 +55,53 @@ public class Service implements Closeable {
         this.monitoringQueue = monitoringQueue;
         this.monitorLogWriter = monitorLogWriter;
 
-        Random randomEngine = new Random();
-        this.noises = NoiseUtils.generateNoiseList(
+        this.noises = NoiseUtils.generateNoises(
                 intervalNoiseStddev, intervalMaxAbsNoise,
                 Math.min(msgCnt, NoiseUtils.MAX_NOISE_LIST_LENGTH), randomEngine
         );
-        this.producerProps = createProducerConfig();
-        this.producer = createProducer();
+        Properties producerProps = createProducerConfig(brokers, clientId, isSync);
+        this.producer = new KafkaProducer<>(producerProps);
+        this.needToCleanupProducer = true;
+    }
+
+    public ProducerService(
+            Producer<String, String> producer, String topicName, int msgCnt,
+            int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, boolean isSync, boolean needFlush,
+            boolean logEnabled, boolean msgTagged, IMessageAdaptor messageAdaptor, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
+    ) {
+        this.topicName = topicName;
+        this.msgCnt = msgCnt;
+        this.interval = interval;
+        this.isSync = isSync;
+        this.needFlush = needFlush;
+        this.logEnabled = logEnabled;
+        this.msgTagged = msgTagged;
+        this.messageAdaptor = messageAdaptor;
+        this.monitoringQueue = monitoringQueue;
+        this.monitorLogWriter = monitorLogWriter;
+
+        this.noises = NoiseUtils.generateNoises(
+                intervalNoiseStddev, intervalMaxAbsNoise,
+                Math.min(msgCnt, NoiseUtils.MAX_NOISE_LIST_LENGTH), randomEngine
+        );
+        this.producer = producer;
+        this.needToCleanupProducer = false;
+    }
+
+    public static Properties createProducerConfig(String brokers, String clientId, boolean isSync) {
+        Properties props = new Properties();
+        props.put("bootstrap.servers", brokers);
+        props.put("client.id", clientId);
+        props.put("batch.size", "1");
+        props.put("linger.ms", "0");
+        props.put("acks", isSync ? "all" : "0");
+        props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+        props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+        return props;
     }
 
     public int curInterval() {
-        int curNoise = noises.get(curIdx % noises.size());
+        int curNoise = noises.next();
         if (curIdx <= 0) return Math.abs(curNoise);
         return interval + curNoise;
     }
@@ -80,10 +110,8 @@ public class Service implements Closeable {
         return curIdx < msgCnt;
     }
 
-    public void produce() {
-        String coreMessage = serviceName + "_" + curIdx;
-        String topicName = serviceName;
-        if (forCreation) topicName = coreMessage;
+    public void work() {
+        String coreMessage = topicName + "_" + curIdx;
         if (msgTagged) coreMessage = "R" + coreMessage; // TODO: use a better tagging strategy
         String message = messageAdaptor.generate(coreMessage);
 
@@ -96,23 +124,7 @@ public class Service implements Closeable {
 
     @Override
     public void close() {
-        if (producer != null) producer.close();
-    }
-
-    private Properties createProducerConfig() {
-        Properties props = new Properties();
-        props.put("bootstrap.servers", brokers);
-        props.put("client.id", clientId);
-        props.put("batch.size", "1");
-        props.put("linger.ms", "0");
-        props.put("acks", isSync ? "all" : "0");
-        props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
-        props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
-        return props;
-    }
-
-    private Producer<String, String> createProducer() {
-        return new KafkaProducer<>(producerProps);
+        if (producer != null && needToCleanupProducer) producer.close();
     }
 
     private void logRequested(String coreMessage) {
@@ -143,7 +155,7 @@ public class Service implements Closeable {
 
         @Override
         public void onCompletion(RecordMetadata metadata, Exception exception) {
-            logCompleted(messageAdaptor.extractMessageId(record.value()));
+            if (logEnabled) logCompleted(messageAdaptor.extractMessageId(record.value()));
         }
     }
 }
