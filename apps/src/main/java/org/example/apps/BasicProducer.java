@@ -7,6 +7,8 @@ import moniq.util.IMessageAdaptor;
 import moniq.util.NaiveMessageGenerator;
 import moniq.writer.MonitorLogWriter;
 import moniq.writer.strategy.ScrapableWriteStrategy;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.logging.log4j.ThreadContext;
 import org.example.core.IService;
 import org.example.core.ServicesRunner;
@@ -19,6 +21,7 @@ import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 
 @Slf4j
@@ -87,6 +90,10 @@ public class BasicProducer implements Runnable {
     private boolean scrapable = false;
 
     @Getter
+    @Option(names = {"--share-producer"}, description = "If true, KafkaProducer instances will be shared among topics in each client. Default: false")
+    private boolean shareProducer = false;
+
+    @Getter
     @Option(names = {"--warmup-cnt"}, description = "Warm-up count before measurement. Default: 0")
     private int warmupCnt = 0;
 
@@ -106,6 +113,7 @@ public class BasicProducer implements Runnable {
 
     private final List<ServicesRunner> producersByClients = new ArrayList<>();
     private final List<Thread> producerThreads = new ArrayList<>();
+    private final List<Producer<String, String>> sharedProducers = new ArrayList<>();
 
     private IMessageAdaptor messageAdaptor;
     private MonitorQueue monitoringQueue;
@@ -156,7 +164,8 @@ public class BasicProducer implements Runnable {
     private void init() {
         Runtime.getRuntime().addShutdownHook(emergencyCleanupHook);
         initMonitor();
-        initProducers();
+        if (shareProducer) initSharingProdServices();
+        else initStandaloneServices();
     }
 
     private void initMonitor() {
@@ -171,7 +180,7 @@ public class BasicProducer implements Runnable {
         monitorLogWriterThread.start();
     }
 
-    private void initProducers() {
+    private void initStandaloneServices() {
         for (int i = 0; i < clientCnt; i++) {
             List<IService> services = new ArrayList<>();
             for (int j = 0; j < topicCntPerClient; j++) {
@@ -201,7 +210,55 @@ public class BasicProducer implements Runnable {
                     0,
                     0,
                     false,
+                    true,
                     false,
+                    false,
+                    messageAdaptor,
+                    monitoringQueue,
+                    monitorLogWriter
+            );
+            producersByClients.add(new ServicesRunner(
+                    services,
+                    warmupService,
+                    intervalBtwTopic,
+                    intervalNoiseStddevBtwTopic,
+                    intervalBtwTopic / 2, startSignal)
+            );
+        }
+    }
+
+    private void initSharingProdServices() {
+        for (int i = 0; i < clientCnt; i++) {
+            List<IService> services = new ArrayList<>();
+            Properties properties = ProducerService.createProducerConfig(brokers, prefix + "_" + i, isSync);
+            Producer<String, String> producer = new KafkaProducer<>(properties);
+            sharedProducers.add(producer);
+            for (int j = 0; j < topicCntPerClient; j++) {
+                services.add(new ProducerService(
+                        producer,
+                        prefix + "_" + i + "_" + j,
+                        msgCntPerTopic,
+                        interval,
+                        intervalNoiseStddev,
+                        interval / 2,
+                        isSync,
+                        needFlush,
+                        (!sampleLog || i == 0),
+                        tagRecord,
+                        messageAdaptor,
+                        monitoringQueue,
+                        monitorLogWriter
+                ));
+            }
+            IService warmupService = new ProducerService(
+                    producer,
+                    warmupTopic,
+                    warmupCnt,
+                    0,
+                    0,
+                    0,
+                    false,
+                    true,
                     false,
                     false,
                     messageAdaptor,
@@ -220,6 +277,7 @@ public class BasicProducer implements Runnable {
 
     private void waitAndCleanup() {
         joinProducers();
+        for (Producer<String, String> producer: sharedProducers) producer.close();
         cleanupLogWriter();
         Runtime.getRuntime().removeShutdownHook(emergencyCleanupHook);
     }
@@ -238,6 +296,7 @@ public class BasicProducer implements Runnable {
             }
         }
         joinProducers();
+        for (Producer<String, String> producer: sharedProducers) producer.close();
     }
 
     private void joinProducers() {
