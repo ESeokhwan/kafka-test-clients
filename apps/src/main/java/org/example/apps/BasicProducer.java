@@ -22,6 +22,7 @@ import java.lang.management.RuntimeMXBean;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
+import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 
 @Slf4j
@@ -181,6 +182,7 @@ public class BasicProducer implements Runnable {
     }
 
     private void initStandaloneServices() {
+        Random randomEngine = new Random();
         for (int i = 0; i < clientCnt; i++) {
             List<IService> services = new ArrayList<>();
             for (int j = 0; j < topicCntPerClient; j++) {
@@ -192,6 +194,7 @@ public class BasicProducer implements Runnable {
                         interval,
                         intervalNoiseStddev,
                         interval / 2,
+                        randomEngine,
                         isSync,
                         needFlush,
                         (!sampleLog || i == 0),
@@ -209,6 +212,7 @@ public class BasicProducer implements Runnable {
                     0,
                     0,
                     0,
+                    randomEngine,
                     false,
                     true,
                     false,
@@ -222,12 +226,15 @@ public class BasicProducer implements Runnable {
                     warmupService,
                     intervalBtwTopic,
                     intervalNoiseStddevBtwTopic,
-                    intervalBtwTopic / 2, startSignal)
-            );
+                    intervalBtwTopic / 2,
+                    randomEngine,
+                    startSignal
+            ));
         }
     }
 
     private void initSharingProdServices() {
+        Random randomEngine = new Random();
         for (int i = 0; i < clientCnt; i++) {
             List<IService> services = new ArrayList<>();
             Properties properties = ProducerService.createProducerConfig(brokers, prefix + "_" + i, isSync);
@@ -241,6 +248,7 @@ public class BasicProducer implements Runnable {
                         interval,
                         intervalNoiseStddev,
                         interval / 2,
+                        randomEngine,
                         isSync,
                         needFlush,
                         (!sampleLog || i == 0),
@@ -257,6 +265,7 @@ public class BasicProducer implements Runnable {
                     0,
                     0,
                     0,
+                    randomEngine,
                     false,
                     true,
                     false,
@@ -270,8 +279,10 @@ public class BasicProducer implements Runnable {
                     warmupService,
                     intervalBtwTopic,
                     intervalNoiseStddevBtwTopic,
-                    intervalBtwTopic / 2, startSignal)
-            );
+                    intervalBtwTopic / 2,
+                    randomEngine,
+                    startSignal
+            ));
         }
     }
 

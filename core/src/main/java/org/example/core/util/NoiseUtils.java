@@ -21,4 +21,19 @@ public class NoiseUtils {
         return noises;
     }
 
+    public static Noises generateNoises(double stddev, int maxAbsNoise, int length, Random randomEngine) {
+        List<Integer> noises = new ArrayList<>(length);
+        if (maxAbsNoise < 0) maxAbsNoise = -maxAbsNoise;
+        for (int i = 0; i < length; i++) {
+            double generatedValue = randomEngine.nextGaussian() * stddev;
+            int noise = (int) Math.round(generatedValue);
+            noises.add(Math.max(-maxAbsNoise, Math.min(noise, maxAbsNoise)));
+        }
+        return new Noises(noises);
+    }
+
+    public static Noises emptyNoises() {
+        return new Noises(List.of());
+    }
+
 }

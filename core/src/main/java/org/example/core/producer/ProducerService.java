@@ -12,9 +12,9 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.example.core.IService;
 import org.example.core.util.NoiseUtils;
+import org.example.core.util.Noises;
 import org.example.core.util.TimeUtils;
 
-import java.util.List;
 import java.util.Properties;
 import java.util.Random;
 
@@ -34,14 +34,14 @@ public class ProducerService implements IService {
     private final MonitorLogWriter monitorLogWriter;
 
     private int curIdx = 0;
-    private final List<Integer> noises;
+    private final Noises noises;
 
     private final Producer<String, String> producer;
     private final boolean needToCleanupProducer;
 
     public ProducerService(
             String brokers, String clientId, String topicName, int msgCnt,
-            int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, boolean isSync, boolean needFlush,
+            int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, boolean isSync, boolean needFlush,
             boolean logEnabled, boolean msgTagged, IMessageAdaptor messageAdaptor, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
         this.topicName = topicName;
@@ -55,8 +55,7 @@ public class ProducerService implements IService {
         this.monitoringQueue = monitoringQueue;
         this.monitorLogWriter = monitorLogWriter;
 
-        Random randomEngine = new Random();
-        this.noises = NoiseUtils.generateNoiseList(
+        this.noises = NoiseUtils.generateNoises(
                 intervalNoiseStddev, intervalMaxAbsNoise,
                 Math.min(msgCnt, NoiseUtils.MAX_NOISE_LIST_LENGTH), randomEngine
         );
@@ -67,7 +66,7 @@ public class ProducerService implements IService {
 
     public ProducerService(
             Producer<String, String> producer, String topicName, int msgCnt,
-            int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, boolean isSync, boolean needFlush,
+            int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, boolean isSync, boolean needFlush,
             boolean logEnabled, boolean msgTagged, IMessageAdaptor messageAdaptor, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
         this.topicName = topicName;
@@ -81,8 +80,7 @@ public class ProducerService implements IService {
         this.monitoringQueue = monitoringQueue;
         this.monitorLogWriter = monitorLogWriter;
 
-        Random randomEngine = new Random();
-        this.noises = NoiseUtils.generateNoiseList(
+        this.noises = NoiseUtils.generateNoises(
                 intervalNoiseStddev, intervalMaxAbsNoise,
                 Math.min(msgCnt, NoiseUtils.MAX_NOISE_LIST_LENGTH), randomEngine
         );
@@ -103,7 +101,7 @@ public class ProducerService implements IService {
     }
 
     public int curInterval() {
-        int curNoise = noises.get(curIdx % noises.size());
+        int curNoise = noises.next();
         if (curIdx <= 0) return Math.abs(curNoise);
         return interval + curNoise;
     }

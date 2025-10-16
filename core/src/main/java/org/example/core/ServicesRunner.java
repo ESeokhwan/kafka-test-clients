@@ -2,6 +2,7 @@ package org.example.core;
 
 import lombok.extern.slf4j.Slf4j;
 import org.example.core.util.NoiseUtils;
+import org.example.core.util.Noises;
 import org.example.core.util.TimeUtils;
 
 import java.io.Closeable;
@@ -20,7 +21,7 @@ public class ServicesRunner implements Runnable, Closeable {
     private final List<IService> services;
     private final IService warmupService;
     private final int interval;
-    private final List<Integer> noises;
+    private final Noises noises;
     private final CountDownLatch startSignal;
     private final CountDownLatch completionSignal;
 
@@ -28,7 +29,7 @@ public class ServicesRunner implements Runnable, Closeable {
     private final PriorityBlockingQueue<ScheduleEntry> scheduleQueue = new PriorityBlockingQueue<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
-    public ServicesRunner(List<IService> services, IService warmupService, int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, CountDownLatch startSignal) {
+    public ServicesRunner(List<IService> services, IService warmupService, int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, CountDownLatch startSignal) {
         this.services = services;
         this.warmupService = warmupService;
         this.interval = interval;
@@ -36,10 +37,9 @@ public class ServicesRunner implements Runnable, Closeable {
         this.completionSignal = new CountDownLatch(services.size());
 
         if (this.interval == -1) {
-            this.noises = List.of();
+            this.noises = NoiseUtils.emptyNoises();
         } else {
-            Random randomEngine = new Random();
-            this.noises = NoiseUtils.generateNoiseList(
+            this.noises = NoiseUtils.generateNoises(
                     intervalNoiseStddev, intervalMaxAbsNoise,
                     Math.min(services.size(), NoiseUtils.MAX_NOISE_LIST_LENGTH), randomEngine
             );
@@ -131,7 +131,7 @@ public class ServicesRunner implements Runnable, Closeable {
                 long nextScheduleTime = TimeUtils.getAccurateCurrentTimeMillis() + scheduleEntry.service.curInterval();
                 scheduleQueue.add(new ScheduleEntry(nextScheduleTime, scheduleEntry.service));
             } else if (interval != -1 && currentServiceIdx < services.size() - 1) {
-                long nextScheduleTime = TimeUtils.getAccurateCurrentTimeMillis() + interval + noises.get(currentServiceIdx % noises.size());
+                long nextScheduleTime = TimeUtils.getAccurateCurrentTimeMillis() + interval + noises.next();
                 currentServiceIdx += 1;
                 scheduleQueue.add(new ScheduleEntry(nextScheduleTime, services.get(currentServiceIdx)));
             }
