@@ -1,10 +1,11 @@
-package org.example.producer;
+package org.example.core;
 
 import lombok.extern.slf4j.Slf4j;
-import org.example.util.NoiseUtils;
-import org.example.util.TimeUtils;
+import org.example.core.util.NoiseUtils;
+import org.example.core.util.TimeUtils;
 
 import java.io.Closeable;
+import java.io.IOException;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
@@ -14,10 +15,10 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
-public class ProducerRun implements Runnable, Closeable {
+public class ServicesRunner implements Runnable, Closeable {
 
-    private final List<Service> services;
-    private final Service warmupService;
+    private final List<IService> services;
+    private final IService warmupService;
     private final int interval;
     private final List<Integer> noises;
     private final CountDownLatch startSignal;
@@ -27,7 +28,7 @@ public class ProducerRun implements Runnable, Closeable {
     private final PriorityBlockingQueue<ScheduleEntry> scheduleQueue = new PriorityBlockingQueue<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
-    public ProducerRun(List<Service> services, Service warmupService, int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, CountDownLatch startSignal) {
+    public ServicesRunner(List<IService> services, IService warmupService, int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, CountDownLatch startSignal) {
         this.services = services;
         this.warmupService = warmupService;
         this.interval = interval;
@@ -65,11 +66,16 @@ public class ProducerRun implements Runnable, Closeable {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
-        close();
+
+        try {
+            close();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
-    public void close() {
+    public void close() throws IOException {
         log.info("Shutting down ProducerRun...");
         scheduler.shutdownNow();
         try {
@@ -77,20 +83,24 @@ public class ProducerRun implements Runnable, Closeable {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
-        for (Service service : services) service.close();
+        for (IService service : services) service.close();
         while (completionSignal.getCount() > 0) completionSignal.countDown();
     }
 
     private void warmup() {
         while (warmupService.hasMore() && completionSignal.getCount() > 0) {
-            warmupService.produce();
+            warmupService.work();
         }
-        warmupService.close();
+        try {
+            warmupService.close();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private void initFirstSchedules() {
         long curTime = TimeUtils.getAccurateCurrentTimeMillis();
-        for (Service service : services) {
+        for (IService service : services) {
             long nextSchedule = curTime + service.curInterval();
             scheduleQueue.add(new ScheduleEntry(nextSchedule, service));
             if (interval != -1) break;
@@ -115,7 +125,7 @@ public class ProducerRun implements Runnable, Closeable {
         @Override
         public void run() {
             if (completionSignal.getCount() == 0) return;
-            scheduleEntry.service.produce();
+            scheduleEntry.service.work();
 
             if (scheduleEntry.service.hasMore()) {
                 long nextScheduleTime = TimeUtils.getAccurateCurrentTimeMillis() + scheduleEntry.service.curInterval();
@@ -139,9 +149,9 @@ public class ProducerRun implements Runnable, Closeable {
     private static class ScheduleEntry implements Comparable<ScheduleEntry> {
 
         private final long scheduledTime;
-        private final Service service;
+        private final IService service;
 
-        public ScheduleEntry(long scheduledTime, Service service) {
+        public ScheduleEntry(long scheduledTime, IService service) {
             this.scheduledTime = scheduledTime;
             this.service = service;
         }

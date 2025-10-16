@@ -8,11 +8,13 @@ import moniq.util.NaiveMessageGenerator;
 import moniq.writer.MonitorLogWriter;
 import moniq.writer.strategy.ScrapableWriteStrategy;
 import org.apache.logging.log4j.ThreadContext;
-import org.example.producer.ProducerRun;
-import org.example.producer.Service;
+import org.example.core.IService;
+import org.example.core.ServicesRunner;
+import org.example.core.producer.ProducerService;
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
 
+import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
 import java.util.ArrayList;
@@ -102,7 +104,7 @@ public class BasicProducer implements Runnable {
 
     private final CountDownLatch startSignal = new CountDownLatch(1);
 
-    private final List<ProducerRun> producersByClients = new ArrayList<>();
+    private final List<ServicesRunner> producersByClients = new ArrayList<>();
     private final List<Thread> producerThreads = new ArrayList<>();
 
     private IMessageAdaptor messageAdaptor;
@@ -133,7 +135,7 @@ public class BasicProducer implements Runnable {
     public void run() {
         init();
 
-        for (ProducerRun producer: producersByClients) {
+        for (ServicesRunner producer: producersByClients) {
             Thread thread = new Thread(producer);
             producerThreads.add(thread);
             thread.start();
@@ -171,9 +173,9 @@ public class BasicProducer implements Runnable {
 
     private void initProducers() {
         for (int i = 0; i < clientCnt; i++) {
-            List<Service> services = new ArrayList<>();
+            List<IService> services = new ArrayList<>();
             for (int j = 0; j < topicCntPerClient; j++) {
-                services.add(new Service(
+                services.add(new ProducerService(
                         brokers,
                         prefix + "_" + i,
                         prefix + "_" + i + "_" + j,
@@ -190,7 +192,7 @@ public class BasicProducer implements Runnable {
                         monitorLogWriter
                 ));
             }
-            Service warmupService = new Service(
+            IService warmupService = new ProducerService(
                     brokers,
                     "warmup_" + i,
                     warmupTopic,
@@ -206,7 +208,7 @@ public class BasicProducer implements Runnable {
                     monitoringQueue,
                     monitorLogWriter
             );
-            producersByClients.add(new ProducerRun(
+            producersByClients.add(new ServicesRunner(
                     services,
                     warmupService,
                     intervalBtwTopic,
@@ -228,7 +230,13 @@ public class BasicProducer implements Runnable {
     }
 
     private void cleanupProducers() {
-        for (ProducerRun producer : producersByClients) producer.close();
+        for (ServicesRunner producer : producersByClients) {
+            try {
+                producer.close();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
         joinProducers();
     }
 

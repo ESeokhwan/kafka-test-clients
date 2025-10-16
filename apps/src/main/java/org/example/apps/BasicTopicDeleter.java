@@ -10,8 +10,8 @@ import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.KafkaAdminClient;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.logging.log4j.ThreadContext;
-import org.example.util.NoiseUtils;
-import org.example.util.TimeUtils;
+import org.example.core.util.NoiseUtils;
+import org.example.core.util.TimeUtils;
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
 

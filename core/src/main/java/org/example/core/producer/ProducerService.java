@@ -1,4 +1,4 @@
-package org.example.producer;
+package org.example.core.producer;
 
 import lombok.extern.slf4j.Slf4j;
 import moniq.MonitorLog;
@@ -10,16 +10,16 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
-import org.example.util.NoiseUtils;
-import org.example.util.TimeUtils;
+import org.example.core.IService;
+import org.example.core.util.NoiseUtils;
+import org.example.core.util.TimeUtils;
 
-import java.io.Closeable;
 import java.util.List;
 import java.util.Properties;
 import java.util.Random;
 
 @Slf4j
-public class Service implements Closeable {
+public class ProducerService implements IService {
 
     private final String brokers;
     private final String clientId;
@@ -41,7 +41,7 @@ public class Service implements Closeable {
     private final Properties producerProps;
     private final Producer<String, String> producer;
 
-    public Service(
+    public ProducerService(
             String brokers, String clientId, String serviceName, int msgCnt,
             int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, boolean isSync, boolean needFlush,
             boolean logEnabled, boolean msgTagged, IMessageAdaptor messageAdaptor, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
@@ -78,7 +78,7 @@ public class Service implements Closeable {
         return curIdx < msgCnt;
     }
 
-    public void produce() {
+    public void work() {
         String coreMessage = serviceName + "_" + curIdx;
         if (msgTagged) coreMessage = "R" + coreMessage; // TODO: use a better tagging strategy
         String message = messageAdaptor.generate(coreMessage);
