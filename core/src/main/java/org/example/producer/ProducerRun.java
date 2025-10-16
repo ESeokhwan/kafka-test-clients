@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 public class ProducerRun implements Runnable, Closeable {
 
     private final List<Service> services;
+    private final Service warmupService;
     private final int interval;
     private final List<Integer> noises;
     private final CountDownLatch startSignal;
@@ -26,8 +27,9 @@ public class ProducerRun implements Runnable, Closeable {
     private final PriorityBlockingQueue<ScheduleEntry> scheduleQueue = new PriorityBlockingQueue<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
-    public ProducerRun(List<Service> services, int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, CountDownLatch startSignal) {
+    public ProducerRun(List<Service> services, Service warmupService, int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, CountDownLatch startSignal) {
         this.services = services;
+        this.warmupService = warmupService;
         this.interval = interval;
         this.startSignal = startSignal;
         this.completionSignal = new CountDownLatch(services.size());
@@ -45,6 +47,8 @@ public class ProducerRun implements Runnable, Closeable {
 
     @Override
     public void run() {
+        warmup();
+
         try {
             startSignal.await();
         } catch (InterruptedException e) {
@@ -75,6 +79,13 @@ public class ProducerRun implements Runnable, Closeable {
         }
         for (Service service : services) service.close();
         while (completionSignal.getCount() > 0) completionSignal.countDown();
+    }
+
+    private void warmup() {
+        while (warmupService.hasMore() && completionSignal.getCount() > 0) {
+            warmupService.produce();
+        }
+        warmupService.close();
     }
 
     private void initFirstSchedules() {

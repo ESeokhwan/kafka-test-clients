@@ -85,6 +85,14 @@ public class BasicProducer implements Runnable {
     private boolean scrapable = false;
 
     @Getter
+    @Option(names = {"--warmup-cnt"}, description = "Warm-up count before measurement. Default: 0")
+    private int warmupCnt = 0;
+
+    @Getter
+    @Option(names = {"--warmup-topic"}, description = "Topic name for warm-up. Default: test_warmup")
+    private String warmupTopic = "test_warmup";
+
+    @Getter
     @Option(names = {"--start-barrier-delay"}, description = "Delay (ms) before starting the production. Default: 0")
     private int startBarrierDelay = 5000;
 
@@ -182,8 +190,27 @@ public class BasicProducer implements Runnable {
                         monitorLogWriter
                 ));
             }
+            Service warmupService = new Service(
+                    brokers,
+                    "warmup_" + i,
+                    warmupTopic,
+                    warmupCnt,
+                    0,
+                    0,
+                    0,
+                    false,
+                    false,
+                    false,
+                    false,
+                    messageAdaptor,
+                    monitoringQueue,
+                    monitorLogWriter
+            );
             producersByClients.add(new ProducerRun(
-                    services, intervalBtwTopic, intervalNoiseStddevBtwTopic,
+                    services,
+                    warmupService,
+                    intervalBtwTopic,
+                    intervalNoiseStddevBtwTopic,
                     intervalBtwTopic / 2, startSignal)
             );
         }

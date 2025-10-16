@@ -139,7 +139,7 @@ public class Service implements Closeable {
 
         @Override
         public void onCompletion(RecordMetadata metadata, Exception exception) {
-            logCompleted(messageAdaptor.extractMessageId(record.value()));
+            if (logEnabled) logCompleted(messageAdaptor.extractMessageId(record.value()));
         }
     }
 }
