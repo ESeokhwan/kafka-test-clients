@@ -1,4 +1,4 @@
-package org.example.apps;
+package org.example.core;
 
 import lombok.extern.slf4j.Slf4j;
 import moniq.MonitorQueue;

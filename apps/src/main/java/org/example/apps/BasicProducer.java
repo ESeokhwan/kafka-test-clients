@@ -7,6 +7,7 @@ import moniq.util.NaiveMessageGenerator;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.logging.log4j.ThreadContext;
+import org.example.core.AbstractCommand;
 import org.example.core.IService;
 import org.example.core.ServicesRunner;
 import org.example.core.producer.ProducerService;
