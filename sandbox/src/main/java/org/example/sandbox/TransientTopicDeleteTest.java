@@ -9,7 +9,7 @@ import moniq.writer.strategy.ScrapableWriteStrategy;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.KafkaAdminClient;
 import org.apache.logging.log4j.ThreadContext;
-import org.example.util.TimeUtils;
+import org.example.core.util.TimeUtils;
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
 

@@ -1,5 +1,11 @@
 package org.example.sandbox;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.RuntimeMXBean;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.Properties;
+import java.util.UUID;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import moniq.MonitorLog;
@@ -8,24 +14,11 @@ import moniq.writer.MonitorLogWriter;
 import moniq.writer.strategy.ScrapableWriteStrategy;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.producer.Callback;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.logging.log4j.ThreadContext;
-import org.example.util.NoiseUtils;
-import org.example.util.TimeUtils;
+import org.example.core.util.TimeUtils;
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
-
-import java.lang.management.ManagementFactory;
-import java.lang.management.RuntimeMXBean;
-import java.time.Duration;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Properties;
-import java.util.Random;
-import java.util.UUID;
 
 @Slf4j
 public class BasicConsumeTest implements Runnable {

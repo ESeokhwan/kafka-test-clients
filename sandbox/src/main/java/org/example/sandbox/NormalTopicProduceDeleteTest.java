@@ -14,8 +14,9 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.logging.log4j.ThreadContext;
-import org.example.util.NoiseUtils;
-import org.example.util.TimeUtils;
+import org.example.core.util.NoiseUtils;
+import org.example.core.util.Noises;
+import org.example.core.util.TimeUtils;
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
 
@@ -78,7 +79,7 @@ public class NormalTopicProduceDeleteTest implements Runnable {
         init();
 
         Random randomEngine = new Random();
-        List<Integer> intervalNoises = NoiseUtils.generateNoiseList(
+        Noises intervalNoises = NoiseUtils.generateNoises(
                 noiseStddev,
                 interval / 2,
                 Math.min(groupCount * perGroupCount, NoiseUtils.MAX_NOISE_LIST_LENGTH),
@@ -98,7 +99,7 @@ public class NormalTopicProduceDeleteTest implements Runnable {
                     else producer.send(record, new BasicProducerCallback(record, j == perGroupCount - 1)).get();
 
                     long elapsedTimeMs = TimeUtils.getAccurateCurrentTimeMillis() - startTimestamp;
-                    long curInterval = interval + intervalNoises.get((i * perGroupCount + j) % intervalNoises.size());
+                    long curInterval = interval + intervalNoises.next();
                     try {
                         Thread.sleep(Math.max(curInterval - (int) elapsedTimeMs, 0));
                     } catch (InterruptedException e) {
