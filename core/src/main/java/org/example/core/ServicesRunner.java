@@ -88,6 +88,7 @@ public class ServicesRunner implements Runnable, Closeable {
     }
 
     private void warmup() {
+        if (warmupService == null) return;
         while (warmupService.hasMore() && completionSignal.getCount() > 0) {
             warmupService.work();
         }
