@@ -34,6 +34,10 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
     private String prefix;
 
     @Getter
+    @Option(names = {"--start-index"}, description = "Start index of topic names. It will be used with topicPrefix. Default: 0")
+    private int startIndex = 0;
+
+    @Getter
     @Option(names = {"--client-cnt"}, description = "Number of clients. Default: 1")
     private int clientCnt = 1;
 
@@ -42,11 +46,11 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
     private int topicCntPerClient = 1;
 
     @Getter
-    @Option(names = {"--msg-cnt-per-topic", "-n"}, description = "Number of messages of each client and topics. Default: 1")
+    @Option(names = {"-n", "--msg-cnt-per-topic"}, description = "Number of messages of each client and topics. Default: 1")
     private int msgCntPerTopic = 1;
 
     @Getter
-    @Option(names = {"--interval", "-i"}, description = "Produce interval (ms). Default: 1000")
+    @Option(names = {"-i", "--interval"}, description = "Produce interval (ms). Default: 1000")
     private int interval = 1000;
 
     @Getter
@@ -64,7 +68,7 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
     private double intervalNoiseStddevBtwTopic = 0;
 
     @Getter
-    @Option(names = {"--msg-size", "-m"}, description = "Message size in bytes. Default: 1000")
+    @Option(names = {"-m", "--msg-size"}, description = "Message size in bytes. Default: 1000")
     private int msgSize = 1000;
 
     @Getter
@@ -166,7 +170,7 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
                 services.add(new TransientTopicProducerService(
                         brokers,
                         prefix + "_" + i,
-                        prefix + "_" + i + "_" + j,
+                        prefix + "_" + i + "_" + (startIndex + j),
                         msgCntPerTopic,
                         interval,
                         intervalNoiseStddev,
@@ -220,7 +224,7 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
             for (int j = 0; j < topicCntPerClient; j++) {
                 services.add(new TransientTopicProducerService(
                         producer,
-                        prefix + "_" + i + "_" + j,
+                        prefix + "_" + i + "_" + (startIndex + j),
                         msgCntPerTopic,
                         interval,
                         intervalNoiseStddev,
