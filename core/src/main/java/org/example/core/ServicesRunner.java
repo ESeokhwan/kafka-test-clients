@@ -10,9 +10,9 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -25,16 +25,18 @@ public class ServicesRunner implements Runnable, Closeable {
     private final CountDownLatch startSignal;
     private final CountDownLatch completionSignal;
 
-    private int currentServiceIdx = 0;
+    private final ScheduledExecutorService scheduler;
     private final PriorityBlockingQueue<ScheduleEntry> scheduleQueue = new PriorityBlockingQueue<>();
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
-    public ServicesRunner(List<IService> services, IService warmupService, int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, CountDownLatch startSignal) {
+    private int currentServiceIdx = 0;
+
+    public ServicesRunner(List<IService> services, IService warmupService, int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, CountDownLatch startSignal, int initSchedulerPoolSize) {
         this.services = services;
         this.warmupService = warmupService;
         this.interval = interval;
         this.startSignal = startSignal;
         this.completionSignal = new CountDownLatch(services.size());
+        this.scheduler = new ScheduledThreadPoolExecutor(initSchedulerPoolSize);
 
         if (this.interval == -1) {
             this.noises = NoiseUtils.emptyNoises();
@@ -90,6 +92,7 @@ public class ServicesRunner implements Runnable, Closeable {
     private void warmup() {
         if (warmupService == null) return;
         while (warmupService.hasMore() && completionSignal.getCount() > 0) {
+            warmupService.reserve();
             warmupService.work();
         }
         try {
@@ -126,9 +129,14 @@ public class ServicesRunner implements Runnable, Closeable {
         @Override
         public void run() {
             if (completionSignal.getCount() == 0) return;
-            scheduleEntry.service.work();
 
-            if (scheduleEntry.service.hasMore()) {
+            boolean hasMoreTaskOnTheService;
+            synchronized (scheduleEntry.service) {
+                scheduleEntry.service.reserve();
+                hasMoreTaskOnTheService = scheduleEntry.service.hasMore();
+            }
+
+            if (hasMoreTaskOnTheService) {
                 long nextScheduleTime = TimeUtils.getAccurateCurrentTimeMillis() + scheduleEntry.service.curInterval();
                 scheduleQueue.add(new ScheduleEntry(nextScheduleTime, scheduleEntry.service));
             } else if (interval != -1 && currentServiceIdx < services.size() - 1) {
@@ -143,7 +151,10 @@ public class ServicesRunner implements Runnable, Closeable {
                 scheduler.schedule(new ProducerTask(nextEntry), delay, TimeUnit.MILLISECONDS);
             }
 
-            if (!scheduleEntry.service.hasMore()) completionSignal.countDown();
+            scheduleEntry.service.work();
+            if (scheduleEntry.service.isDone()) {
+                if (!scheduleEntry.service.closeScheduled()) completionSignal.countDown();
+            }
         }
     }
 

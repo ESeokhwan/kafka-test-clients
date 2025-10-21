@@ -8,5 +8,11 @@ public interface IService extends Closeable {
 
     boolean hasMore();
 
+    boolean isDone();
+
+    void reserve();
+
     void work();
+
+    boolean closeScheduled();
 }

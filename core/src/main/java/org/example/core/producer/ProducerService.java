@@ -10,20 +10,17 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
-import org.example.core.IService;
-import org.example.core.util.NoiseUtils;
-import org.example.core.util.Noises;
+import org.example.core.AbstractService;
 import org.example.core.util.TimeUtils;
 
 import java.util.Properties;
 import java.util.Random;
 
 @Slf4j
-public class ProducerService implements IService {
+public class ProducerService extends AbstractService {
 
     private final String topicName;
-    private final int msgCnt;
-    private final int interval;
+    private final int roundCnt;
     private final boolean isSync;
     private final boolean needFlush;
     private final boolean logEnabled;
@@ -34,19 +31,18 @@ public class ProducerService implements IService {
     private final MonitorLogWriter monitorLogWriter;
 
     private int curIdx = 0;
-    private final Noises noises;
 
     private final Producer<String, String> producer;
     private final boolean needToCleanupProducer;
 
     public ProducerService(
-            String brokers, String clientId, String topicName, int msgCnt,
+            String brokers, String clientId, String topicName, int roundCnt,
             int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, boolean isSync, boolean needFlush,
             boolean logEnabled, boolean msgTagged, IMessageAdaptor messageAdaptor, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
+        super(roundCnt, interval, intervalNoiseStddev, intervalMaxAbsNoise, randomEngine);
         this.topicName = topicName;
-        this.msgCnt = msgCnt;
-        this.interval = interval;
+        this.roundCnt = roundCnt;
         this.isSync = isSync;
         this.needFlush = needFlush;
         this.logEnabled = logEnabled;
@@ -55,23 +51,19 @@ public class ProducerService implements IService {
         this.monitoringQueue = monitoringQueue;
         this.monitorLogWriter = monitorLogWriter;
 
-        this.noises = NoiseUtils.generateNoises(
-                intervalNoiseStddev, intervalMaxAbsNoise,
-                Math.min(msgCnt, NoiseUtils.MAX_NOISE_LIST_LENGTH), randomEngine
-        );
         Properties producerProps = createProducerConfig(brokers, clientId, isSync);
         this.producer = new KafkaProducer<>(producerProps);
         this.needToCleanupProducer = true;
     }
 
     public ProducerService(
-            Producer<String, String> producer, String topicName, int msgCnt,
+            Producer<String, String> producer, String topicName, int roundCnt,
             int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, boolean isSync, boolean needFlush,
             boolean logEnabled, boolean msgTagged, IMessageAdaptor messageAdaptor, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
+        super(roundCnt, interval, intervalNoiseStddev, intervalMaxAbsNoise, randomEngine);
         this.topicName = topicName;
-        this.msgCnt = msgCnt;
-        this.interval = interval;
+        this.roundCnt = roundCnt;
         this.isSync = isSync;
         this.needFlush = needFlush;
         this.logEnabled = logEnabled;
@@ -80,10 +72,6 @@ public class ProducerService implements IService {
         this.monitoringQueue = monitoringQueue;
         this.monitorLogWriter = monitorLogWriter;
 
-        this.noises = NoiseUtils.generateNoises(
-                intervalNoiseStddev, intervalMaxAbsNoise,
-                Math.min(msgCnt, NoiseUtils.MAX_NOISE_LIST_LENGTH), randomEngine
-        );
         this.producer = producer;
         this.needToCleanupProducer = false;
     }
@@ -100,16 +88,12 @@ public class ProducerService implements IService {
         return props;
     }
 
-    public int curInterval() {
-        int curNoise = noises.next();
-        if (curIdx <= 0) return Math.abs(curNoise);
-        return interval + curNoise;
+    @Override
+    public boolean isDone() {
+        return curIdx >= roundCnt;
     }
 
-    public boolean hasMore() {
-        return curIdx < msgCnt;
-    }
-
+    @Override
     public void work() {
         String coreMessage = topicName + "_" + curIdx;
         if (msgTagged) coreMessage = "R" + coreMessage; // TODO: use a better tagging strategy

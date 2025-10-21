@@ -75,6 +75,10 @@ public class BasicTopicCreator extends AbstractCommand implements Runnable {
     @Option(names = "--monitoring-batch-size", description = "Batch size for monitoring log writing. Default: 10,000,000")
     private int monitoringBatchSize = 10_000_000;
 
+    @Getter
+    @Option(names = "--init-scheduler-pool-size", description = "Initial scheduler pool size for services runner. Default: 8")
+    private int initSchedulerPoolSize = 8;
+
     private ServicesRunner serviceRunner;
     private Thread serviceRunnerThread;
 
@@ -132,7 +136,7 @@ public class BasicTopicCreator extends AbstractCommand implements Runnable {
         ));
         serviceRunner = new ServicesRunner(
                 services, null, -1, 0,
-                0, randomEngine, startSignal);
+                0, randomEngine, startSignal, initSchedulerPoolSize);
 
         serviceRunnerThread = new Thread(serviceRunner);
         serviceRunnerThread.start();
