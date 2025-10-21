@@ -111,6 +111,10 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
     @Option(names = "--monitoring-batch-size", description = "Batch size for monitoring log writing. Default: 10,000,000")
     private int monitoringBatchSize = 10_000_000;
 
+    @Getter
+    @Option(names = "--init-scheduler-pool-size", description = "Initial scheduler pool size for services runner. Default: 8")
+    private int initSchedulerPoolSize = 8;
+
     private final List<ServicesRunner> producersByClients = new ArrayList<>();
     private final List<Thread> producerThreads = new ArrayList<>();
     private final List<Producer<String, String>> sharedProducers = new ArrayList<>();
@@ -209,7 +213,8 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
                     intervalNoiseStddevBtwTopic,
                     intervalBtwTopic / 2,
                     randomEngine,
-                    startSignal
+                    startSignal,
+                    initSchedulerPoolSize
             ));
         }
     }
@@ -262,7 +267,8 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
                     intervalNoiseStddevBtwTopic,
                     intervalBtwTopic / 2,
                     randomEngine,
-                    startSignal
+                    startSignal,
+                    initSchedulerPoolSize
             ));
         }
     }
