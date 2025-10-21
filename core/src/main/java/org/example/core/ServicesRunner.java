@@ -13,6 +13,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -25,16 +26,18 @@ public class ServicesRunner implements Runnable, Closeable {
     private final CountDownLatch startSignal;
     private final CountDownLatch completionSignal;
 
-    private int currentServiceIdx = 0;
+    private final ScheduledExecutorService scheduler;
     private final PriorityBlockingQueue<ScheduleEntry> scheduleQueue = new PriorityBlockingQueue<>();
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
-    public ServicesRunner(List<IService> services, IService warmupService, int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, CountDownLatch startSignal) {
+    private int currentServiceIdx = 0;
+
+    public ServicesRunner(List<IService> services, IService warmupService, int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, CountDownLatch startSignal, int initSchedulerPoolSize) {
         this.services = services;
         this.warmupService = warmupService;
         this.interval = interval;
         this.startSignal = startSignal;
         this.completionSignal = new CountDownLatch(services.size());
+        this.scheduler = new ScheduledThreadPoolExecutor(initSchedulerPoolSize);
 
         if (this.interval == -1) {
             this.noises = NoiseUtils.emptyNoises();
