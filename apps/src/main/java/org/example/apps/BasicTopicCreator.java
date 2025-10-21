@@ -76,8 +76,8 @@ public class BasicTopicCreator extends AbstractCommand implements Runnable {
     private int monitoringBatchSize = 10_000_000;
 
     @Getter
-    @Option(names = "--init-scheduler-pool-size", description = "Initial scheduler pool size for services runner. Default: 64")
-    private int initSchedulerPoolSize = 64;
+    @Option(names = "--init-scheduler-pool-size", description = "Initial scheduler pool size for services runner. Default: 8")
+    private int initSchedulerPoolSize = 8;
 
     private ServicesRunner serviceRunner;
     private Thread serviceRunnerThread;

@@ -108,8 +108,8 @@ public class BasicProducer extends AbstractCommand implements Runnable {
     private int monitoringBatchSize = 10_000_000;
 
     @Getter
-    @Option(names = "--init-scheduler-pool-size", description = "Initial scheduler pool size for services runner. Default: 64")
-    private int initSchedulerPoolSize = 64;
+    @Option(names = "--init-scheduler-pool-size", description = "Initial scheduler pool size for services runner. Default: 8")
+    private int initSchedulerPoolSize = 8;
 
     private final List<ServicesRunner> producersByClients = new ArrayList<>();
     private final List<Thread> producerThreads = new ArrayList<>();
