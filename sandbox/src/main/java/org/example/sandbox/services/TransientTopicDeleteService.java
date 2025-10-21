@@ -1,28 +1,25 @@
 package org.example.sandbox.services;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Properties;
-import java.util.Random;
-import java.util.concurrent.ExecutionException;
 import moniq.MonitorLog;
 import moniq.MonitorQueue;
 import moniq.writer.MonitorLogWriter;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.common.KafkaFuture;
-import org.example.core.IService;
-import org.example.core.util.NoiseUtils;
-import org.example.core.util.Noises;
+import org.example.core.AbstractService;
 import org.example.core.util.TimeUtils;
 
-public class TransientTopicDeleteService implements IService {
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Properties;
+import java.util.Random;
+import java.util.concurrent.ExecutionException;
+
+public class TransientTopicDeleteService extends AbstractService {
 
     private final String topicPrefix;
     private final int startIndex;
     private final int roundCnt;
     private final int perRoundCnt;
-    private final int interval;
-    private final Noises noises;
     private final boolean isBatch;
     private final boolean isSync;
     private final boolean logEnabled;
@@ -40,21 +37,17 @@ public class TransientTopicDeleteService implements IService {
             int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine,
             boolean isBatch, boolean isSync, boolean logEnabled, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
+        super(roundCnt, interval, intervalNoiseStddev, intervalMaxAbsNoise, randomEngine);
         this.topicPrefix = topicPrefix;
         this.startIndex = startIndex;
         this.roundCnt = roundCnt;
         this.perRoundCnt = perRoundCnt;
-        this.interval = interval;
         this.isBatch = isBatch;
         this.isSync = isSync;
         this.logEnabled = logEnabled;
         this.monitoringQueue = monitoringQueue;
         this.monitorLogWriter = monitorLogWriter;
 
-        this.noises = NoiseUtils.generateNoises(
-                intervalNoiseStddev, intervalMaxAbsNoise,
-                Math.min(roundCnt, NoiseUtils.MAX_NOISE_LIST_LENGTH), randomEngine
-        );
         Properties clientProps = createAdminClientConfig(brokers, clientId);
         this.adminClient = AdminClient.create(clientProps);
         this.needToCleanupClient = true;
@@ -65,21 +58,17 @@ public class TransientTopicDeleteService implements IService {
             int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine,
             boolean isBatch, boolean isSync, boolean logEnabled, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
+        super(roundCnt, interval, intervalNoiseStddev, intervalMaxAbsNoise, randomEngine);
         this.topicPrefix = topicPrefix;
         this.startIndex = startIndex;
         this.roundCnt = roundCnt;
         this.perRoundCnt = perRoundCnt;
-        this.interval = interval;
         this.isBatch = isBatch;
         this.isSync = isSync;
         this.logEnabled = logEnabled;
         this.monitoringQueue = monitoringQueue;
         this.monitorLogWriter = monitorLogWriter;
 
-        this.noises = NoiseUtils.generateNoises(
-                intervalNoiseStddev, intervalMaxAbsNoise,
-                Math.min(roundCnt, NoiseUtils.MAX_NOISE_LIST_LENGTH), randomEngine
-        );
         this.adminClient = adminClient;
         this.needToCleanupClient = false;
     }
@@ -93,15 +82,8 @@ public class TransientTopicDeleteService implements IService {
     }
 
     @Override
-    public int curInterval() {
-        int curNoise = noises.next();
-        if (curIdx == 0) return Math.abs(curNoise);
-        return interval + curNoise;
-    }
-
-    @Override
-    public boolean hasMore() {
-        return curIdx < roundCnt;
+    public boolean isDone() {
+        return curIdx >= roundCnt;
     }
 
     @Override
