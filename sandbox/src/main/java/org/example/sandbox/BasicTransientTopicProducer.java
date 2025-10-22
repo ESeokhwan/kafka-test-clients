@@ -252,7 +252,8 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
                 ));
             }
             IService warmupService = new ProducerService(
-                    producer,
+                    brokers,
+                    "warmup_" + i,
                     warmupTopic,
                     warmupCnt,
                     0,
