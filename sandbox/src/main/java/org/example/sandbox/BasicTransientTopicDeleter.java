@@ -55,6 +55,10 @@ public class BasicTransientTopicDeleter extends AbstractCommand implements Runna
     private boolean isSync = false;
 
     @Getter
+    @Option(names = {"--ignore-response"}, description = "If true, client will ignore responses from Kafka brokers. Default: false")
+    private boolean ignoreResponse = false;
+
+    @Getter
     @Option(names = {"--log-disabled"}, description = "If true, monitor log will be disabled. Default: false")
     private boolean logDisabled = false;
 
@@ -119,6 +123,7 @@ public class BasicTransientTopicDeleter extends AbstractCommand implements Runna
                 randomEngine,
                 isBatch,
                 isSync,
+                ignoreResponse,
                 !logDisabled,
                 monitoringQueue,
                 monitorLogWriter

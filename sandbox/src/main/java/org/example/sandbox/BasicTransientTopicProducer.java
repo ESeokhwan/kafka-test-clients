@@ -76,6 +76,10 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
     private boolean isSync = false;
 
     @Getter
+    @Option(names = {"--ignore-response"}, description = "If true, producer will ignore responses from Kafka brokers. Default: false")
+    private boolean ignoreResponse = false;
+
+    @Getter
     @Option(names = {"--need-flush"}, description = "If true, flush will be called after producing messages. Default: false")
     private boolean needFlush = false;
 
@@ -181,6 +185,7 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
                         interval / 2,
                         randomEngine,
                         isSync,
+                        ignoreResponse,
                         needFlush,
                         (!sampleLog || i == 0),
                         tagRecord,
@@ -199,6 +204,7 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
                     0,
                     randomEngine,
                     false,
+                    true,
                     true,
                     false,
                     false,
@@ -223,7 +229,7 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
         Random randomEngine = new Random();
         for (int i = 0; i < clientCnt; i++) {
             List<IService> services = new ArrayList<>();
-            Properties properties = TransientTopicProducerService.createProducerConfig(brokers, prefix + "_" + i, isSync);
+            Properties properties = TransientTopicProducerService.createProducerConfig(brokers, prefix + "_" + i, isSync || !ignoreResponse);
             Producer<String, String> producer = new KafkaTransientTopicProducer<>(properties);
             sharedProducers.add(producer);
             for (int j = 0; j < topicCntPerClient; j++) {
@@ -236,6 +242,7 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
                         interval / 2,
                         randomEngine,
                         isSync,
+                        ignoreResponse,
                         needFlush,
                         (!sampleLog || i == 0),
                         tagRecord,
@@ -253,6 +260,7 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
                     0,
                     randomEngine,
                     false,
+                    true,
                     true,
                     false,
                     false,
