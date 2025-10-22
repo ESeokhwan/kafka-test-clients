@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Properties;
 import java.util.Random;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class TopicCreateService extends AbstractService {
 
@@ -34,7 +35,7 @@ public class TopicCreateService extends AbstractService {
     private final AdminClient adminClient;
     private final boolean needToCleanupClient;
 
-    private int curIdx = 0;
+    private final AtomicInteger curIdx = new AtomicInteger(0);
 
     public TopicCreateService(
             String brokers, String clientId, String topicPrefix, int partitionCnt, short replicationFactor, int startIndex, int roundCnt, int perRoundCnt,
@@ -93,16 +94,15 @@ public class TopicCreateService extends AbstractService {
 
     @Override
     public boolean isDone() {
-        return curIdx >= roundCnt;
+        return curIdx.get() >= roundCnt;
     }
 
     @Override
     public void work() {
-        int curTopicIdx = startIndex + curIdx * perRoundCnt;
+        int curTopicIdx = startIndex + curIdx.getAndIncrement() * perRoundCnt;
         List<String> topics = new ArrayList<>();
         for (int i = 0; i < perRoundCnt; i++) topics.add(topicPrefix + "_" + (curTopicIdx + i));
         doCreateTopics(topics);
-        curIdx += 1;
     }
 
     @Override

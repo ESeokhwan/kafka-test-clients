@@ -15,6 +15,7 @@ import org.example.core.util.TimeUtils;
 
 import java.util.Properties;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 public class ProducerService extends AbstractService {
@@ -31,7 +32,7 @@ public class ProducerService extends AbstractService {
     private final MonitorQueue monitoringQueue;
     private final MonitorLogWriter monitorLogWriter;
 
-    private int curIdx = 0;
+    private final AtomicInteger curIdx = new AtomicInteger(0);
 
     private final Producer<String, String> producer;
     private final boolean needToCleanupProducer;
@@ -93,12 +94,12 @@ public class ProducerService extends AbstractService {
 
     @Override
     public boolean isDone() {
-        return curIdx >= roundCnt;
+        return curIdx.get() >= roundCnt;
     }
 
     @Override
     public void work() {
-        String coreMessage = topicName + "_" + curIdx;
+        String coreMessage = topicName + "_" + curIdx.getAndIncrement();
         if (msgTagged) coreMessage = "R" + coreMessage; // TODO: use a better tagging strategy
         String message = messageAdaptor.generate(coreMessage);
 
@@ -106,7 +107,6 @@ public class ProducerService extends AbstractService {
         logRequested(coreMessage);
         producer.send(record, new ProducerCallback(record));
         if (needFlush || isSync) producer.flush();
-        curIdx += 1;
     }
 
     @Override
