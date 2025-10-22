@@ -5,6 +5,7 @@ import org.example.core.util.Noises;
 
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public abstract class AbstractService implements IService {
 
@@ -13,7 +14,7 @@ public abstract class AbstractService implements IService {
     private final Noises noises;
     private final AtomicBoolean closeScheduled = new AtomicBoolean(false);
 
-    private int curIdxReserved = 0;
+    private final AtomicInteger curIdxReserved = new AtomicInteger(0);
 
     protected AbstractService(int roundCnt, int interval, Noises noises) {
         this.roundCnt = roundCnt;
@@ -33,18 +34,19 @@ public abstract class AbstractService implements IService {
     @Override
     public int curInterval() {
         int curNoise = noises.next();
-        if (curIdxReserved <= 0) return Math.abs(curNoise);
+        if (curIdxReserved.get() <= 0) return Math.abs(curNoise);
         return interval + curNoise;
     }
 
     @Override
     public boolean hasMore() {
-        return curIdxReserved < roundCnt;
+        return curIdxReserved.get() < roundCnt;
     }
 
     @Override
-    public void reserve() {
-        curIdxReserved += 1;
+    public boolean reserve() {
+        int afterReserve = curIdxReserved.incrementAndGet();
+        return afterReserve < roundCnt;
     }
 
     @Override

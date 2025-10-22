@@ -130,12 +130,7 @@ public class ServicesRunner implements Runnable, Closeable {
         public void run() {
             if (completionSignal.getCount() == 0) return;
 
-            boolean hasMoreTaskOnTheService;
-            synchronized (scheduleEntry.service) {
-                scheduleEntry.service.reserve();
-                hasMoreTaskOnTheService = scheduleEntry.service.hasMore();
-            }
-
+            boolean hasMoreTaskOnTheService = scheduleEntry.service.reserve();
             if (hasMoreTaskOnTheService) {
                 long nextScheduleTime = TimeUtils.getAccurateCurrentTimeMillis() + scheduleEntry.service.curInterval();
                 scheduleQueue.add(new ScheduleEntry(nextScheduleTime, scheduleEntry.service));
