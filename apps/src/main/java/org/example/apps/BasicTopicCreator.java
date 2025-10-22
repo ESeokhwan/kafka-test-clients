@@ -64,6 +64,10 @@ public class BasicTopicCreator extends AbstractCommand implements Runnable {
     private boolean isSync = false;
 
     @Getter
+    @Option(names = {"--ignore-response"}, description = "If true, producer will ignore responses from Kafka brokers. Default: false")
+    private boolean ignoreResponse = false;
+
+    @Getter
     @Option(names = {"--log-disabled"}, description = "If true, monitor log will be disabled. Default: false")
     private boolean logDisabled = false;
 
@@ -130,6 +134,7 @@ public class BasicTopicCreator extends AbstractCommand implements Runnable {
                 randomEngine,
                 isBatch,
                 isSync,
+                ignoreResponse,
                 !logDisabled,
                 monitoringQueue,
                 monitorLogWriter

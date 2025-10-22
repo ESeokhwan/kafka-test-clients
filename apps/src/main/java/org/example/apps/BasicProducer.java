@@ -72,6 +72,10 @@ public class BasicProducer extends AbstractCommand implements Runnable {
     private boolean isSync = false;
 
     @Getter
+    @Option(names = {"--ignore-response"}, description = "If true, producer will ignore responses from Kafka brokers. Default: false")
+    private boolean ignoreResponse = false;
+
+    @Getter
     @Option(names = {"--need-flush"}, description = "If true, flush will be called after producing messages. Default: false")
     private boolean needFlush = false;
 
@@ -177,6 +181,7 @@ public class BasicProducer extends AbstractCommand implements Runnable {
                         interval / 2,
                         randomEngine,
                         isSync,
+                        ignoreResponse,
                         needFlush,
                         (!sampleLog || i == 0),
                         tagRecord,
@@ -195,6 +200,7 @@ public class BasicProducer extends AbstractCommand implements Runnable {
                     0,
                     randomEngine,
                     false,
+                    true,
                     true,
                     false,
                     false,
@@ -219,7 +225,7 @@ public class BasicProducer extends AbstractCommand implements Runnable {
         Random randomEngine = new Random();
         for (int i = 0; i < clientCnt; i++) {
             List<IService> services = new ArrayList<>();
-            Properties properties = ProducerService.createProducerConfig(brokers, prefix + "_" + i, isSync);
+            Properties properties = ProducerService.createProducerConfig(brokers, prefix + "_" + i, isSync || !ignoreResponse);
             Producer<String, String> producer = new KafkaProducer<>(properties);
             sharedProducers.add(producer);
             for (int j = 0; j < topicCntPerClient; j++) {
@@ -232,6 +238,7 @@ public class BasicProducer extends AbstractCommand implements Runnable {
                         interval / 2,
                         randomEngine,
                         isSync,
+                        ignoreResponse,
                         needFlush,
                         (!sampleLog || i == 0),
                         tagRecord,
@@ -249,6 +256,7 @@ public class BasicProducer extends AbstractCommand implements Runnable {
                     0,
                     randomEngine,
                     false,
+                    true,
                     true,
                     false,
                     false,

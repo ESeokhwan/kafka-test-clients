@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Properties;
 import java.util.Random;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class TopicCreateService extends AbstractService {
 
@@ -25,6 +26,7 @@ public class TopicCreateService extends AbstractService {
     private final int perRoundCnt;
     private final boolean isBatch;
     private final boolean isSync;
+    private final boolean ignoreResponse;
     private final boolean logEnabled;
 
     private final MonitorQueue monitoringQueue;
@@ -33,12 +35,12 @@ public class TopicCreateService extends AbstractService {
     private final AdminClient adminClient;
     private final boolean needToCleanupClient;
 
-    private int curIdx = 0;
+    private final AtomicInteger curIdx = new AtomicInteger(0);
 
     public TopicCreateService(
             String brokers, String clientId, String topicPrefix, int partitionCnt, short replicationFactor, int startIndex, int roundCnt, int perRoundCnt,
             int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine,
-            boolean isBatch, boolean isSync, boolean logEnabled, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
+            boolean isBatch, boolean isSync, boolean ignoreResponse, boolean logEnabled, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
         super(roundCnt, interval, intervalNoiseStddev, intervalMaxAbsNoise, randomEngine);
         this.topicPrefix = topicPrefix;
@@ -49,6 +51,7 @@ public class TopicCreateService extends AbstractService {
         this.perRoundCnt = perRoundCnt;
         this.isBatch = isBatch;
         this.isSync = isSync;
+        this.ignoreResponse = ignoreResponse;
         this.logEnabled = logEnabled;
         this.monitoringQueue = monitoringQueue;
         this.monitorLogWriter = monitorLogWriter;
@@ -61,7 +64,7 @@ public class TopicCreateService extends AbstractService {
     public TopicCreateService(
             AdminClient adminClient, String topicPrefix, int partitionCnt, short replicationFactor, int startIndex, int roundCnt, int perRoundCnt,
             int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine,
-            boolean isBatch, boolean isSync, boolean logEnabled, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
+            boolean isBatch, boolean isSync, boolean ignoreResponse, boolean logEnabled, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
         super(roundCnt, interval, intervalNoiseStddev, intervalMaxAbsNoise, randomEngine);
         this.topicPrefix = topicPrefix;
@@ -72,6 +75,7 @@ public class TopicCreateService extends AbstractService {
         this.perRoundCnt = perRoundCnt;
         this.isBatch = isBatch;
         this.isSync = isSync;
+        this.ignoreResponse = ignoreResponse;
         this.logEnabled = logEnabled;
         this.monitoringQueue = monitoringQueue;
         this.monitorLogWriter = monitorLogWriter;
@@ -90,16 +94,15 @@ public class TopicCreateService extends AbstractService {
 
     @Override
     public boolean isDone() {
-        return curIdx >= roundCnt;
+        return curIdx.get() >= roundCnt;
     }
 
     @Override
     public void work() {
-        int curTopicIdx = startIndex + curIdx * perRoundCnt;
+        int curTopicIdx = startIndex + curIdx.getAndIncrement() * perRoundCnt;
         List<String> topics = new ArrayList<>();
         for (int i = 0; i < perRoundCnt; i++) topics.add(topicPrefix + "_" + (curTopicIdx + i));
         doCreateTopics(topics);
-        curIdx += 1;
     }
 
     @Override
@@ -108,33 +111,37 @@ public class TopicCreateService extends AbstractService {
     }
 
     private void doCreateTopics(List<String> topicNames) {
-        if (isBatch) {
-            doCreateTopicBatch(topicNames);
-            return;
-        }
+        try {
+            if (isBatch) {
+                doCreateTopicBatch(topicNames);
+                return;
+            }
 
-        for (String topicName: topicNames) {
-            doCreateTopic(topicName);
+            for (String topicName : topicNames) {
+                doCreateTopic(topicName);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
-    private void doCreateTopic(String topicName) {
+    private void doCreateTopic(String topicName) throws InterruptedException {
         appendMonitorLog(topicName, "REQUESTED");
 
         KafkaFuture<Void> future = adminClient.createTopics(
                 List.of(new NewTopic(topicName, partitionCnt, replicationFactor))
         ).all();
-        if (!isSync) return;
-
-        try {
-            future.get(); // Wait for the deletion to complete if not async
-            appendMonitorLog(topicName, "RESPONDED");
-        } catch (InterruptedException | ExecutionException e) {
-            appendMonitorLog(topicName, "FAILED");
+        if (!ignoreResponse) future.whenComplete(handleResponse(List.of(topicName)));
+        if (isSync) {
+            try {
+                future.get(); // Wait for the deletion to complete if not async
+            } catch (ExecutionException e) {
+                throw new RuntimeException(e);
+            }
         }
     }
 
-    private void doCreateTopicBatch(List<String> topicNames) {
+    private void doCreateTopicBatch(List<String> topicNames) throws InterruptedException {
         long stTimestamp = TimeUtils.getCurrentTimeMillis();
         long stTimestampNano = TimeUtils.getCurrentTimeNanos();
 
@@ -142,29 +149,28 @@ public class TopicCreateService extends AbstractService {
                 t -> new NewTopic(t, partitionCnt, replicationFactor)
         ).toList();
         KafkaFuture<Void> future = adminClient.createTopics(topics).all();
-        if (!isSync) {
-            for (String topicName: topicNames) {
-                appendMonitorLog(topicName, "REQUESTED", stTimestamp, stTimestampNano);
-            }
-            return;
-        }
+        if (!ignoreResponse) future.whenComplete(handleResponse(topicNames));
 
-        try {
-            future.get(); // Wait for the deletion to complete if sync
-            long enTimestamp = TimeUtils.getCurrentTimeMillis();
-            long enTimestampNano = TimeUtils.getCurrentTimeNanos();
-            for (String topicName: topicNames) {
-                appendMonitorLog(topicName, "REQUESTED", stTimestamp, stTimestampNano);
-                appendMonitorLog(topicName, "RESPONDED", enTimestamp, enTimestampNano);
-            }
-        } catch (InterruptedException | ExecutionException e) {
-            long enTimestamp = TimeUtils.getCurrentTimeMillis();
-            long enTimestampNano = TimeUtils.getCurrentTimeNanos();
-            for (String topicName: topicNames) {
-                appendMonitorLog(topicName, "REQUESTED", stTimestamp, stTimestampNano);
-                appendMonitorLog(topicName, "FAILED", enTimestamp, enTimestampNano);
+        for (String topicName: topicNames) appendMonitorLog(topicName, "REQUESTED", stTimestamp, stTimestampNano);
+        if (isSync) {
+            try {
+                future.get(); // Wait for the deletion to complete if sync
+            } catch (ExecutionException e) {
+                throw new RuntimeException(e);
             }
         }
+    }
+
+    private KafkaFuture.BiConsumer<Void, Throwable> handleResponse(List<String> topicNames) {
+        return (res, ex) -> {
+            long enTimestamp = TimeUtils.getCurrentTimeMillis();
+            long enTimestampNano = TimeUtils.getCurrentTimeNanos();
+            if (ex != null) {
+                for (String topicName : topicNames) appendMonitorLog(topicName, "FAILED", enTimestamp, enTimestampNano);
+                return;
+            }
+            for (String topicName : topicNames) appendMonitorLog(topicName, "RESPONDED", enTimestamp, enTimestampNano);
+        };
     }
 
     private void appendMonitorLog(String topic, String status, long timestamp, long timestampNano) {

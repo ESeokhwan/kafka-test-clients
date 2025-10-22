@@ -10,7 +10,7 @@ public interface IService extends Closeable {
 
     boolean isDone();
 
-    void reserve();
+    boolean reserve();
 
     void work();
 

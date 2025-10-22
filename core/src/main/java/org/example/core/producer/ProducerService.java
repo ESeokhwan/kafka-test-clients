@@ -15,6 +15,7 @@ import org.example.core.util.TimeUtils;
 
 import java.util.Properties;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 public class ProducerService extends AbstractService {
@@ -22,6 +23,7 @@ public class ProducerService extends AbstractService {
     private final String topicName;
     private final int roundCnt;
     private final boolean isSync;
+    private final boolean ignoreResponse;
     private final boolean needFlush;
     private final boolean logEnabled;
     private final boolean msgTagged;
@@ -30,20 +32,21 @@ public class ProducerService extends AbstractService {
     private final MonitorQueue monitoringQueue;
     private final MonitorLogWriter monitorLogWriter;
 
-    private int curIdx = 0;
+    private final AtomicInteger curIdx = new AtomicInteger(0);
 
     private final Producer<String, String> producer;
     private final boolean needToCleanupProducer;
 
     public ProducerService(
             String brokers, String clientId, String topicName, int roundCnt,
-            int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, boolean isSync, boolean needFlush,
+            int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, boolean isSync, boolean ignoreResponse, boolean needFlush,
             boolean logEnabled, boolean msgTagged, IMessageAdaptor messageAdaptor, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
         super(roundCnt, interval, intervalNoiseStddev, intervalMaxAbsNoise, randomEngine);
         this.topicName = topicName;
         this.roundCnt = roundCnt;
         this.isSync = isSync;
+        this.ignoreResponse = ignoreResponse;
         this.needFlush = needFlush;
         this.logEnabled = logEnabled;
         this.msgTagged = msgTagged;
@@ -51,20 +54,21 @@ public class ProducerService extends AbstractService {
         this.monitoringQueue = monitoringQueue;
         this.monitorLogWriter = monitorLogWriter;
 
-        Properties producerProps = createProducerConfig(brokers, clientId, isSync);
+        Properties producerProps = createProducerConfig(brokers, clientId, isSync || !ignoreResponse);
         this.producer = new KafkaProducer<>(producerProps);
         this.needToCleanupProducer = true;
     }
 
     public ProducerService(
             Producer<String, String> producer, String topicName, int roundCnt,
-            int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, boolean isSync, boolean needFlush,
+            int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, boolean isSync, boolean ignoreResponse, boolean needFlush,
             boolean logEnabled, boolean msgTagged, IMessageAdaptor messageAdaptor, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
         super(roundCnt, interval, intervalNoiseStddev, intervalMaxAbsNoise, randomEngine);
         this.topicName = topicName;
         this.roundCnt = roundCnt;
         this.isSync = isSync;
+        this.ignoreResponse = ignoreResponse;
         this.needFlush = needFlush;
         this.logEnabled = logEnabled;
         this.msgTagged = msgTagged;
@@ -76,13 +80,13 @@ public class ProducerService extends AbstractService {
         this.needToCleanupProducer = false;
     }
 
-    public static Properties createProducerConfig(String brokers, String clientId, boolean isSync) {
+    public static Properties createProducerConfig(String brokers, String clientId, boolean needAcks) {
         Properties props = new Properties();
         props.put("bootstrap.servers", brokers);
         props.put("client.id", clientId);
         props.put("batch.size", "1");
         props.put("linger.ms", "0");
-        props.put("acks", isSync ? "all" : "0");
+        props.put("acks", needAcks ? "all" : "0");
         props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
         props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
         return props;
@@ -90,20 +94,19 @@ public class ProducerService extends AbstractService {
 
     @Override
     public boolean isDone() {
-        return curIdx >= roundCnt;
+        return curIdx.get() >= roundCnt;
     }
 
     @Override
     public void work() {
-        String coreMessage = topicName + "_" + curIdx;
+        String coreMessage = topicName + "_" + curIdx.getAndIncrement();
         if (msgTagged) coreMessage = "R" + coreMessage; // TODO: use a better tagging strategy
         String message = messageAdaptor.generate(coreMessage);
 
         ProducerRecord<String, String> record = new ProducerRecord<>(topicName, message);
-        if (logEnabled) logRequested(coreMessage);
+        logRequested(coreMessage);
         producer.send(record, new ProducerCallback(record));
         if (needFlush || isSync) producer.flush();
-        curIdx += 1;
     }
 
     @Override
@@ -112,6 +115,7 @@ public class ProducerService extends AbstractService {
     }
 
     private void logRequested(String coreMessage) {
+        if (!logEnabled) return;
         long timestamp = TimeUtils.getCurrentTimeMillis();
         long timestampNano = TimeUtils.getCurrentTimeNanos();
         monitoringQueue.enqueue(new MonitorLog(
@@ -121,6 +125,7 @@ public class ProducerService extends AbstractService {
     }
 
     private void logCompleted(String coreMessage) {
+        if (!logEnabled) return;
         long timestamp = TimeUtils.getCurrentTimeMillis();
         long timestampNano = TimeUtils.getCurrentTimeNanos();
         monitoringQueue.enqueue(new MonitorLog(
@@ -139,7 +144,7 @@ public class ProducerService extends AbstractService {
 
         @Override
         public void onCompletion(RecordMetadata metadata, Exception exception) {
-            if (logEnabled) logCompleted(messageAdaptor.extractMessageId(record.value()));
+            if (!ignoreResponse) logCompleted(messageAdaptor.extractMessageId(record.value()));
         }
     }
 }
