@@ -34,6 +34,10 @@ public class BasicProducer extends AbstractCommand implements Runnable {
     private String prefix;
 
     @Getter
+    @Option(names = {"--start-index"}, description = "Start index of topic names. It will be used with topicPrefix. Default: 0")
+    private int startIndex = 0;
+
+    @Getter
     @Option(names = {"--client-cnt"}, description = "Number of clients. Default: 1")
     private int clientCnt = 1;
 
@@ -174,7 +178,7 @@ public class BasicProducer extends AbstractCommand implements Runnable {
                 services.add(new ProducerService(
                         brokers,
                         prefix + "_" + i,
-                        prefix + "_" + i + "_" + j,
+                        prefix + "_" + i + "_" + (startIndex + j),
                         msgCntPerTopic,
                         interval,
                         intervalNoiseStddev,
@@ -231,7 +235,7 @@ public class BasicProducer extends AbstractCommand implements Runnable {
             for (int j = 0; j < topicCntPerClient; j++) {
                 services.add(new ProducerService(
                         producer,
-                        prefix + "_" + i + "_" + j,
+                        prefix + "_" + i + "_" + (startIndex + j),
                         msgCntPerTopic,
                         interval,
                         intervalNoiseStddev,
