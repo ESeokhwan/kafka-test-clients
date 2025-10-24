@@ -99,7 +99,7 @@ public class TransientTopicProducerService extends AbstractService {
 
     public void work() {
         String coreMessage = topicName + "_" + curIdx.getAndIncrement();
-        if (msgTagged) coreMessage = "R" + coreMessage; // TODO: use a better tagging strategy
+        if (msgTagged && logEnabled) coreMessage = "R" + coreMessage; // TODO: use a better tagging strategy
         String message = messageAdaptor.generate(coreMessage);
 
         ProducerRecord<String, String> record = new ProducerRecord<>(topicName, message);
