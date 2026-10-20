@@ -1,0 +1,7 @@
+[submodule "moniq"]
+	path = moniq
+	url = https://github.com/ESeokhwan/moniq.git
+[submodule "kafka-tt"]
+	path = kafka-tt
+	url = https://github.com/ESeokhwan/kafka-tt.git
+	branch = develop_v2_producer_client

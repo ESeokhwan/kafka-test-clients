@@ -1,15 +1,17 @@
 package org.example.sandbox.services;
 
+import java.time.Duration;
+import java.util.concurrent.ExecutionException;
 import lombok.extern.slf4j.Slf4j;
 import moniq.MonitorLog;
 import moniq.MonitorQueue;
 import moniq.util.IMessageAdaptor;
 import moniq.writer.MonitorLogWriter;
-import org.apache.kafka.clients.producer.Callback;
-import org.apache.kafka.clients.producer.KafkaTransientTopicProducer;
-import org.apache.kafka.clients.producer.Producer;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.clients.producer.KafkaTransientProducer;
+import org.apache.kafka.clients.producer.TransientCallback;
+import org.apache.kafka.clients.producer.TransientProducerRecord;
+import org.apache.kafka.clients.producer.TransientRecordMetadata;
+import org.apache.kafka.clients.producer.TransientTopicHandle;
 import org.example.core.AbstractService;
 import org.example.core.util.TimeUtils;
 
@@ -32,10 +34,12 @@ public class TransientTopicProducerService extends AbstractService {
     private final MonitorQueue monitoringQueue;
     private final MonitorLogWriter monitorLogWriter;
 
-    private final Producer<String, String> producer;
+    private final KafkaTransientProducer<String, String> producer;
     private final boolean needToCleanupProducer;
 
     private final AtomicInteger curIdx = new AtomicInteger(0);
+
+    private TransientTopicHandle topic = null;
 
     public TransientTopicProducerService(
             String brokers, String clientId, String topicName, int roundCnt,
@@ -55,12 +59,12 @@ public class TransientTopicProducerService extends AbstractService {
         this.monitorLogWriter = monitorLogWriter;
 
         Properties producerProps = createProducerConfig(brokers, clientId, isSync || !ignoreResponse);
-        this.producer = new KafkaTransientTopicProducer<>(producerProps);
+        this.producer = new KafkaTransientProducer<>(producerProps);
         this.needToCleanupProducer = true;
     }
 
     public TransientTopicProducerService(
-            Producer<String, String> producer, String topicName, int roundCnt,
+            KafkaTransientProducer<String, String> producer, String topicName, int roundCnt,
             int interval, double intervalNoiseStddev, int intervalMaxAbsNoise, Random randomEngine, boolean isSync, boolean ignoreResponse, boolean needFlush,
             boolean logEnabled, boolean msgTagged, IMessageAdaptor messageAdaptor, MonitorQueue monitoringQueue, MonitorLogWriter monitorLogWriter
     ) {
@@ -102,10 +106,16 @@ public class TransientTopicProducerService extends AbstractService {
         if (msgTagged && logEnabled) coreMessage = "R" + coreMessage; // TODO: use a better tagging strategy
         String message = messageAdaptor.generate(coreMessage);
 
-        ProducerRecord<String, String> record = new ProducerRecord<>(topicName, message);
         logRequested(coreMessage);
+        if (topic == null) topic = createNewTransientTopic(topicName);
+        TransientProducerRecord<String, String> record = new TransientProducerRecord<>(topic, message);
         producer.send(record, new ProducerCallback(record));
         if (needFlush || isSync) producer.flush();
+
+        if (isDone()) {
+            producer.seal(topic);
+            producer.flush();
+        }
     }
 
     @Override
@@ -133,16 +143,29 @@ public class TransientTopicProducerService extends AbstractService {
         monitorLogWriter.notifyIfNeeded();
     }
 
-    private class ProducerCallback implements Callback {
+    private TransientTopicHandle createNewTransientTopic(String topicName) {
+        try {
+            return producer.create(topicName).get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            producer.close(Duration.ZERO);
+            throw new IllegalStateException("interrupt during transient topic creation", e);
+        } catch (ExecutionException e) {
+            producer.close(Duration.ZERO);
+            throw new IllegalStateException("transient topic creation failed", e.getCause());
+        }
+    }
 
-        private final ProducerRecord<String, String> record;
+    private class ProducerCallback implements TransientCallback {
 
-        public ProducerCallback(ProducerRecord<String, String> record) {
+        private final TransientProducerRecord<String, String> record;
+
+        public ProducerCallback(TransientProducerRecord<String, String> record) {
             this.record = record;
         }
 
         @Override
-        public void onCompletion(RecordMetadata metadata, Exception exception) {
+        public void onCompletion(TransientRecordMetadata metadata, Exception exception) {
             if (!ignoreResponse) logCompleted(messageAdaptor.extractMessageId(record.value()));
         }
     }

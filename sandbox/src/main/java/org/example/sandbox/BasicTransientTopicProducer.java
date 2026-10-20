@@ -11,8 +11,7 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import moniq.util.IMessageAdaptor;
 import moniq.util.NaiveMessageGenerator;
-import org.apache.kafka.clients.producer.KafkaTransientTopicProducer;
-import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.KafkaTransientProducer;
 import org.apache.logging.log4j.ThreadContext;
 import org.example.core.AbstractCommand;
 import org.example.core.IService;
@@ -121,7 +120,7 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
 
     private final List<ServicesRunner> producersByClients = new ArrayList<>();
     private final List<Thread> producerThreads = new ArrayList<>();
-    private final List<Producer<String, String>> sharedProducers = new ArrayList<>();
+    private final List<KafkaTransientProducer<String, String>> sharedProducers = new ArrayList<>();
 
     private IMessageAdaptor messageAdaptor;
 
@@ -154,7 +153,7 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
         startBarrier(startBarrierDelay);
 
         joinProducers();
-        for (Producer<String, String> producer: sharedProducers) producer.close();
+        for (KafkaTransientProducer<String, String> producer: sharedProducers) producer.close();
         cleanupMonitor();
         Runtime.getRuntime().removeShutdownHook(emergencyCleanupHook);
     }
@@ -230,7 +229,7 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
         for (int i = 0; i < clientCnt; i++) {
             List<IService> services = new ArrayList<>();
             Properties properties = TransientTopicProducerService.createProducerConfig(brokers, prefix + "_" + i, isSync || !ignoreResponse);
-            Producer<String, String> producer = new KafkaTransientTopicProducer<>(properties);
+            KafkaTransientProducer<String, String> producer = new KafkaTransientProducer<>(properties);
             sharedProducers.add(producer);
             for (int j = 0; j < topicCntPerClient; j++) {
                 services.add(new TransientTopicProducerService(
@@ -291,7 +290,7 @@ public class BasicTransientTopicProducer extends AbstractCommand implements Runn
             }
         }
         joinProducers();
-        for (Producer<String, String> producer: sharedProducers) producer.close();
+        for (KafkaTransientProducer<String, String> producer: sharedProducers) producer.close();
     }
 
     private void joinProducers() {
