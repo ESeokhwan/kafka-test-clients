@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+KAFKA_HOME="${KAFKA_HOME:-/data4/kafka-tt}"
+LIB_DIR="${KAFKA_HOME}/libs"
+KAFKA_CLIENTS_LIB_DIR="${KAFKA_HOME}/clients/build/libs"
+KAFKA_DEP_LIB_DIR="${KAFKA_HOME}/core/build/dependant-libs-2.13.16"
+CLASSPATH=".:${LIB_DIR}/*:${KAFKA_CLIENTS_LIB_DIR}/*:${KAFKA_DEP_LIB_DIR}/*"
+
+if ! compgen -G "${KAFKA_CLIENTS_LIB_DIR}/kafka-clients*.jar" > /dev/null; then
+    echo "[Error] kafka-clients jar not found under ${KAFKA_CLIENTS_LIB_DIR}"
+    echo "[Hint] Build it first: cd ${KAFKA_HOME} && ./gradlew :clients:jar"
+    exit 1
+fi
+
+JMX_HOST="${JMX_HOST:-127.0.0.1}"
+JMX_PORT="${JMX_PORT:-9999}"
+BOOTSTRAP_SERVERS="${BOOTSTRAP_SERVERS:-127.0.0.1:9092}"
+SCAN_INTERVAL_MS="${SCAN_INTERVAL_MS:-1000}"
+SCAN_LOG_INTERVAL_MS="${SCAN_LOG_INTERVAL_MS:-1000}"
+INACTIVITY_CHECK_INTERVAL_MS="${INACTIVITY_CHECK_INTERVAL_MS:-1000}"
+INACTIVITY_THRESHOLD_MS="${INACTIVITY_THRESHOLD_MS:-1000}"
+DELETION_MODE="${DELETION_MODE:-BATCH}"
+CSV_FILE="${CSV_FILE:-topic_metrics.csv}"
+
+echo "[Script] Compiling Java source..."
+javac -encoding UTF-8 -cp "${CLASSPATH}" KafkaJmxProducerBatchDaemon.java
+
+echo "[Script] Starting daemon..."
+java -cp "${CLASSPATH}" KafkaJmxProducerBatchDaemon \
+    "${JMX_HOST}" \
+    "${JMX_PORT}" \
+    "${BOOTSTRAP_SERVERS}" \
+    "${SCAN_INTERVAL_MS}" \
+    "${INACTIVITY_CHECK_INTERVAL_MS}" \
+    "${DELETION_MODE}" \
+    "${CSV_FILE}" \
+    "${INACTIVITY_THRESHOLD_MS}" \
+    "${SCAN_LOG_INTERVAL_MS}"

@@ -213,3 +213,14 @@ local.settings.gradle
 .idea/mavenHomeManager.xml
 GEMINI.md
 logs/
+
+# tmp
+scripts/renewed_output
+.bloop
+.metals
+.vscode
+.codex-backups
+codex_jobs
+codex_logs
+experiment_results
+renewed_output
