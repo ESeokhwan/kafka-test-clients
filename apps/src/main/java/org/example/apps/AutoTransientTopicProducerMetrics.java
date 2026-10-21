@@ -360,7 +360,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         private final String topicName;
         private final String clientId;
 
-        private TransientTopicHandle topic;
+        private TransientTopicHandle topic = null;
 
         private TransientTopicWorker(String topicName, String clientId) {
             this.topicName = topicName;
@@ -399,22 +399,20 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
 
             long topicCreateRequestMs = TimeUtils.getCurrentTimeMillis();
             try {
-                boolean firstSend = true;
                 while (running.get() && System.nanoTime() < deadlineNanos) {
                     sleepUntil(nextProduceNanos);
                     if (!running.get() || System.nanoTime() >= deadlineNanos) {
                         break;
                     }
 
-                    if (firstSend) {
-                      try {
-                        topic = await(producer.create(topicName), 60_000);
-                      } catch (Exception e) {
-                        continue;
-                      }
-                      long responseMs = TimeUtils.getCurrentTimeMillis();
+                    if (topic == null) {
+                        try {
+                            topic = await(producer.create(topicName), 60_000);
+                        } catch (Exception e) {
+                            continue;
+                        }
+                        long responseMs = TimeUtils.getCurrentTimeMillis();
                         metrics.addTopicCreateLatency(responseMs - topicCreateRequestMs);
-                        firstSend = false;
                     }
 
                     String messageId = topicName + "_" + sentCnt;
@@ -453,6 +451,10 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                     }
                 }
             } finally {
+                if (topic != null) {
+                    producer.seal(topic);
+                    producer.flush();
+                }
                 if (!shareProducer) {
                     producer.flush();
                     producer.close();
