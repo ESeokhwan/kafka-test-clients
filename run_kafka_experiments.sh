@@ -37,8 +37,12 @@ usage() {
       "원격: --remote-identity-file KEY --remote-stage-timeout-seconds 7200" \
       "빌드: --build (기본 ON) / --no-build (기존 apps JAR 재사용). 호출당 1회, 단독 모드 포함." \
       "반복: --retry N (각 Hz의 총 실행 횟수, 기본 1, 실패 재시도가 아닌 실험 반복)" \
-      "토픽: --topic-mode auto|precreate (기본 auto), --topic-prepare-timeout-seconds 300" \
+      "토픽: --topic-mode auto|precreate|transient (기본 auto), --topic-prepare-timeout-seconds 300" \
       "precreate: 토픽 생성 → 선택적 fio → 데이터 생산 → cleanup (--no-delete --cleanup 필수)" \
+      "transient: AutoTransientTopicProducerMetrics 사용, 일반 토픽 검사·사전 생성·JMX 삭제 생략" \
+      "transient 정리: --cleanup (기본 ON)으로 apps ResetTransientTopics 실행, --no-cleanup으로 생략" \
+      "reset 재정의: --transient-reset-script PATH (선택, 로컬 외부 reset 스크립트)" \
+      "reset 인수: --bootstrap-server BROKERS --timeout-ms MS; 모든 Transient 클라이언트 종료 후 클러스터 전체 초기화" \
       "스위치: --fio / --no-fio, --delete / --no-delete, --cleanup / --no-cleanup" \
       "기본 스위치: fio=on delete=off cleanup=on iostat=on" \
       "fio: --fio-target-dir --fio-size-gib --fio-passes --reserve-gib --expected-disk --fio-script" \
@@ -98,7 +102,7 @@ while [[ $# -gt 0 ]]; do
             extra_args+=("$1"); shift; continue ;;
         --) shift; extra_args+=("$@"); break ;;
         fio|delete|cleanup) select_mode "$option"; mode="$option"; shift; continue ;;
-        --output-layout|--experiment-label|--step-delay-seconds|--topic-mode|--topic-prepare-timeout-seconds|--retry|--hz|--mode|--brokers|--prefix|--topic-cnt|--run-duration-minutes|--topic-lifetime-ms|--produce-hz-per-topic|--msg-size|--start-index|--start-barrier-delay-ms|--fio-target-dir|--fio-size-gib|--fio-passes|--reserve-gib|--expected-disk|--fio-script|--jmx-host|--jmx-port|--scan-interval-ms|--scan-log-interval-ms|--inactivity-check-interval-ms|--inactivity-threshold-ms|--deletion-mode|--delete-start-timeout-seconds|--delete-topic-prefix|--cleanup-topic-prefix|--cleanup-timeout-seconds|--output-dir|--inter-experiment-delay-seconds|--kafka-home|--daemon-source|--client-dir|--runner) ;;
+        --output-layout|--experiment-label|--step-delay-seconds|--topic-mode|--topic-prepare-timeout-seconds|--transient-reset-script|--retry|--hz|--mode|--brokers|--prefix|--topic-cnt|--run-duration-minutes|--topic-lifetime-ms|--produce-hz-per-topic|--msg-size|--start-index|--start-barrier-delay-ms|--fio-target-dir|--fio-size-gib|--fio-passes|--reserve-gib|--expected-disk|--fio-script|--jmx-host|--jmx-port|--scan-interval-ms|--scan-log-interval-ms|--inactivity-check-interval-ms|--inactivity-threshold-ms|--deletion-mode|--delete-start-timeout-seconds|--delete-topic-prefix|--cleanup-topic-prefix|--cleanup-timeout-seconds|--output-dir|--inter-experiment-delay-seconds|--kafka-home|--daemon-source|--client-dir|--runner) ;;
         *) if [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
                select_mode hz; rates=("$1"); shift; continue
            fi
@@ -146,7 +150,6 @@ OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR/renewed_output/auto_topic_producer_metrics
 FIO_ENABLED="${FIO_ENABLED:-true}"
 DELETE_ENABLED="${DELETE_ENABLED:-false}"
 CLEANUP_ENABLED="${CLEANUP_ENABLED:-true}"
-[[ "$mode" != experiment || "$CLEANUP_ENABLED" == true ]] || fail "동일 토픽 이름을 재사용하므로 실험 모드에서는 --cleanup이 필수입니다."
 IOSTAT_ENABLED="${IOSTAT_ENABLED:-true}"
 FIO_SCRIPT="${FIO_SCRIPT:-$SCRIPT_DIR/prepare_ssd_fio.sh}"
 FIO_TARGET_DIR="${FIO_TARGET_DIR:-/data4}"
@@ -175,7 +178,10 @@ retry_index=1
 TOPIC_CNT="${TOPIC_CNT:--1}"
 TOPIC_MODE="${TOPIC_MODE:-auto}"
 TOPIC_PREPARE_TIMEOUT_SECONDS="${TOPIC_PREPARE_TIMEOUT_SECONDS:-300}"
-[[ "$TOPIC_MODE" == auto || "$TOPIC_MODE" == precreate ]] || fail "--topic-mode는 auto 또는 precreate입니다."
+TRANSIENT_RESET_SCRIPT="${TRANSIENT_RESET_SCRIPT:-}"
+PRODUCER_CLASS=AutoTopicProducerMetrics
+[[ "$TOPIC_MODE" == auto || "$TOPIC_MODE" == precreate || "$TOPIC_MODE" == transient ]] || fail "--topic-mode는 auto, precreate 또는 transient입니다."
+[[ "$mode" != experiment || "$TOPIC_MODE" == transient || "$CLEANUP_ENABLED" == true ]] || fail "동일 토픽 이름을 재사용하므로 일반 토픽 실험에서는 --cleanup이 필수입니다."
 [[ "$TOPIC_PREPARE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]{0,4}$ ]] || fail "토픽 준비 제한 시간은 1~99999초입니다."
 if [[ "$TOPIC_MODE" == precreate ]]; then
     [[ "$mode" == experiment && "$DELETE_ENABLED" == false && "$CLEANUP_ENABLED" == true ]] || fail "precreate는 실험 모드에서 --no-delete --cleanup으로 실행하세요. 생산 전 빈 토픽 삭제를 방지합니다."
@@ -201,6 +207,28 @@ DELETE_START_TIMEOUT_SECONDS="${DELETE_START_TIMEOUT_SECONDS:-60}"
 for value in "$FIO_ENABLED" "$DELETE_ENABLED" "$CLEANUP_ENABLED" "$STATS_DISABLED" "$IOSTAT_ENABLED" "$DROP_CACHES" "$BUILD_ENABLED"; do
     [[ "$value" == true || "$value" == false ]] || fail "기능 스위치는 true/false로 지정하세요."
 done
+if [[ "$TOPIC_MODE" == transient ]]; then
+    [[ "$mode" == experiment ]] || fail "--topic-mode transient는 실험 모드(--all/--hz)에서만 지원합니다."
+    [[ "$DELETE_ENABLED" == false ]] || fail "transient 모드에서는 일반 토픽 JMX 삭제기(--delete)를 사용할 수 없습니다."
+    for arg in "$@"; do
+        case "$arg" in
+            --ignore-response|--ignore-response=*) fail "transient 모드는 acks=all이 필요하므로 --ignore-response를 사용할 수 없습니다." ;;
+            --check-topics-absent*|--prepare-topics-only*|--require-existing-topics*) fail "transient 모드에서는 일반 토픽 준비 옵션을 사용할 수 없습니다: $arg" ;;
+        esac
+    done
+    if [[ "$CLEANUP_ENABLED" == true ]]; then
+        if [[ -n "$TRANSIENT_RESET_SCRIPT" ]]; then
+            [[ -f "$TRANSIENT_RESET_SCRIPT" && -r "$TRANSIENT_RESET_SCRIPT" ]] || fail "읽을 수 있는 Transient reset 스크립트가 필요합니다: $TRANSIENT_RESET_SCRIPT"
+        fi
+        [[ "$CLEANUP_TIMEOUT_SECONDS" =~ ^[1-9][0-9]{0,4}$ ]] && (( CLEANUP_TIMEOUT_SECONDS <= 86400 )) || fail "Transient reset 제한 시간은 1~86400초입니다."
+    fi
+    PRODUCER_CLASS=AutoTransientTopicProducerMetrics
+fi
+CLEANUP_POLICY=none
+if [[ "$CLEANUP_ENABLED" == true ]]; then
+    if [[ "$TOPIC_MODE" == transient ]]; then CLEANUP_POLICY=reset-transient-topics
+    else CLEANUP_POLICY=delete-topics; fi
+fi
 [[ "$INTER_EXPERIMENT_DELAY_SECONDS" =~ ^[0-9]{1,6}$ ]] || fail "딜레이는 0 이상의 정수입니다."
 [[ "$STEP_DELAY_SECONDS" =~ ^[0-9]{1,6}$ ]] || fail "--step-delay-seconds는 0 이상의 정수입니다."
 # 분산 모드에서 서버 자원 작업만 SSH로 보낸다.
@@ -325,6 +353,7 @@ start_record() {
         printf 'RETRY=%s\nRETRY_INDEX=%s\n' "$RETRY" "$retry_index"
         printf 'OUTPUT_LAYOUT=%s\nEXPERIMENT_LABEL=%s\n' "$OUTPUT_LAYOUT" "$EXPERIMENT_LABEL"
         printf 'TOPIC_MODE=%s\nTOPIC_PREPARE_TIMEOUT_SECONDS=%s\n' "$TOPIC_MODE" "$TOPIC_PREPARE_TIMEOUT_SECONDS"
+        printf 'PRODUCER_CLASS=%s\nCLEANUP_POLICY=%s\nTRANSIENT_RESET_SCRIPT=%q\n' "$PRODUCER_CLASS" "$CLEANUP_POLICY" "$TRANSIENT_RESET_SCRIPT"
         if [[ "$TOPIC_MODE" == precreate ]]; then
             printf 'PRECREATE_SEED_MESSAGES_PER_TOPIC=1\nPRECREATE_SEED_ACKS=all\nPRECREATE_SEED_INCLUDED_IN_METRICS=false\n'
         else
@@ -346,7 +375,7 @@ start_record() {
         printf 'EXPERIMENT_PREFIX=%q\n' "${experiment_prefix:-}"
         # 기록 대상은 실행 파일로 한정하고 전체 환경 변수는 저장하지 않는다.
         if command -v sha256sum >/dev/null; then
-            for source_file in "$SCRIPT_DIR/run_kafka_experiments.sh" "$FIO_SCRIPT" "$DAEMON_SOURCE" "$RUNNER" "$built_jar"; do
+            for source_file in "$SCRIPT_DIR/run_kafka_experiments.sh" "$FIO_SCRIPT" "$DAEMON_SOURCE" "$RUNNER" "$built_jar" "$TRANSIENT_RESET_SCRIPT"; do
                 if [[ -f "$source_file" ]]; then sha256sum -- "$source_file"; fi
             done
         fi
@@ -426,6 +455,17 @@ on_exit() {
             echo '시작 전 준비/검사 실패: 추가 복구 삭제 없이 전체 실행을 중단합니다.' >&2
             complete_exit "$status"
         fi
+        if [[ "$TOPIC_MODE" == transient ]]; then
+            if [[ "$CLEANUP_ENABLED" == false || "${transient_reset_attempted:-false}" == true ]]; then
+                # reset 실패/시간 초과는 부분 초기화일 수 있으므로 자동으로 재시도하지 않는다.
+                record_event "status=RECOVERY_SKIPPED cleanup_policy=$CLEANUP_POLICY reset_attempted=${transient_reset_attempted:-false} next_experiment_allowed=false"
+                describe_step '[실험 실패] Transient reset을 자동 재시도하지 않고 전체 실행을 중단합니다. --no-cleanup이면 복구 reset도 생략합니다.'
+                if [[ "${cache_before_done:-false}" == true ]]; then
+                    (drop_caches after_failure) || status=1
+                fi
+                complete_exit "$status"
+            fi
+        fi
         describe_step "[실험 실패] 현재 실험 토픽을 정리합니다 (--no-cleanup이어도 실패 시 정리)."
         # 복구 중 오류는 재복구하지 않고 전체 실행을 중단한다.
         # EXIT 처리 중 EXIT 트랩을 교체해도 재호출되지 않으므로 별도 셸에서 복구한다.
@@ -480,7 +520,11 @@ trap 'interrupted=true; exit 129' HUP
 wait_job() {
     local status=0 progress_label="${1:-}" progress_log="${2:-}" started=$SECONDS next_report=$SECONDS latest
     local duration_seconds="${3:-}" elapsed remaining
+    local timeout_seconds="${4:-}"
     while kill -0 "$job_pid" 2>/dev/null; do
+        if [[ -n "$timeout_seconds" ]] && (( SECONDS - started >= timeout_seconds )); then
+            fail "작업 시간 초과: ${timeout_seconds}초, 상세 로그=$progress_log"
+        fi
         if [[ -n "$iostat_pid" ]] && ! kill -0 "$iostat_pid" 2>/dev/null; then
             fail "iostat이 종료되었습니다. 디스크 상태 로그를 확인하세요."
         fi
@@ -602,6 +646,10 @@ start_delete() {
 }
 run_cleanup() {
     local scope="$1" tag="$2" progress_label="${3:-STEP 5 cleanup 진행}"
+    if [[ "$TOPIC_MODE" == transient ]]; then
+        run_transient_reset "$tag" "$progress_label"
+        return 0
+    fi
     local cleanup_start="" cleanup_count=""
     if [[ "$mode" == experiment ]]; then cleanup_start="$START_INDEX"; cleanup_count="$planned_topics"; fi
     [[ -n "$scope" && "$scope" != __* ]] || fail "삭제할 실험 접두어가 필요합니다."
@@ -615,6 +663,25 @@ run_cleanup() {
         >"$OUTPUT_DIR/${tag}_cleanup.log" 2>&1 &
     job_pid=$!
     wait_job "$progress_label" "$OUTPUT_DIR/${tag}_cleanup.log"
+}
+# 기본 reset은 apps의 AdminClient 앱을 사용하며 외부 스크립트로 재정의할 수 있다.
+run_transient_reset() {
+    local progress_label="$2" log="$OUTPUT_DIR/${1}_reset.log"
+    [[ "$CLEANUP_ENABLED" == true ]] || fail "Transient cleanup이 비활성화되어 있습니다."
+    [[ -z "$job_pid" ]] || fail "생산 작업 종료 전에는 Transient reset을 실행할 수 없습니다."
+    local -a reset_args=(--bootstrap-server "$BROKERS" --timeout-ms "$((CLEANUP_TIMEOUT_SECONDS * 1000))")
+    local -a reset_command=(bash "$RUNNER" apps ResetTransientTopics "${reset_args[@]}")
+    if [[ -n "$TRANSIENT_RESET_SCRIPT" ]]; then
+        reset_command=(bash "$TRANSIENT_RESET_SCRIPT" "${reset_args[@]}")
+    fi
+    describe_step "  Transient reset: 모든 Transient 클라이언트가 종료된 실험 클러스터 전체를 초기화합니다. 제한=${CLEANUP_TIMEOUT_SECONDS}초, 로그=$log"
+    record_event 'stage=TRANSIENT_RESET_START scope=cluster'
+    record_command TRANSIENT_RESET_COMMAND setsid "${reset_command[@]}"
+    transient_reset_attempted=true
+    setsid "${reset_command[@]}" >"$log" 2>&1 &
+    job_pid=$!
+    wait_job "$progress_label" "$log" "" "$CLEANUP_TIMEOUT_SECONDS"
+    record_event 'stage=TRANSIENT_RESET_SUCCESS scope=cluster'
 }
 run_fio() {
     local fio_log="$OUTPUT_DIR/${1}_fio.log"
@@ -694,10 +761,38 @@ build_producer_jar() {
     record_file=""
 }
 build_producer_jar
+if [[ "$mode" == experiment && "$TOPIC_MODE" == transient ]]; then
+    # --no-build/원격 빌드의 JAR에 필요한 클래스가 있는지 장시간 준비 전에 확인한다.
+    record_file="$build_metadata"
+    "$PYTHON" - "$built_jar" "$CLEANUP_ENABLED" "$TRANSIENT_RESET_SCRIPT" <<'PY' || fail "Transient 생산기/reset 앱과 커스텀 Kafka API를 포함한 apps JAR이 필요합니다. --build와 CUSTOM_KAFKA_PATH를 확인하세요."
+import sys
+import zipfile
+
+required = {
+    'org/example/apps/AutoTransientTopicProducerMetrics.class',
+    'org/apache/kafka/clients/producer/KafkaTransientProducer.class',
+    'org/apache/kafka/clients/producer/TransientProducerRecord.class',
+    'org/apache/kafka/clients/producer/TransientTopicHandle.class',
+    'org/apache/kafka/clients/producer/TransientCallback.class',
+}
+if sys.argv[2] == 'true' and not sys.argv[3]:
+    required.update({
+        'org/example/apps/ResetTransientTopics.class',
+        'org/apache/kafka/clients/admin/ResetTransientTopicsOptions.class',
+        'org/apache/kafka/clients/admin/ResetTransientTopicsResult.class',
+    })
+with zipfile.ZipFile(sys.argv[1]) as jar:
+    missing = required.difference(jar.namelist())
+if missing:
+    sys.exit('JAR에 필요한 클래스가 없습니다: ' + ', '.join(sorted(missing)))
+PY
+    record_event 'stage=TRANSIENT_JAR_CHECK status=SUCCESS'
+    record_file=""
+fi
 if [[ -z "$BROKER_SSH" && ( "$mode" == fio || ( "$mode" == experiment && "$FIO_ENABLED" == true ) ) ]]; then
     [[ -f "$FIO_SCRIPT" ]] || fail "fio 스크립트가 없습니다: $FIO_SCRIPT"
 fi
-if [[ "$mode" == delete || "$mode" == cleanup || "$mode" == experiment ]]; then
+if [[ "$mode" == delete || "$mode" == cleanup || ( "$mode" == experiment && "$TOPIC_MODE" != transient ) ]]; then
     # 정상 cleanup OFF여도 실패 복구용 cleanup은 항상 준비한다.
     prepare_daemon
 fi
@@ -784,6 +879,7 @@ for ((index=0; index<total_experiments; index++)); do
     experiment_cleanup_allowed=false
     previous_step=""
     cache_before_done=false
+    transient_reset_attempted=false
     interrupted=false
     record_file="$OUTPUT_DIR/${tag}.run.txt"
     trap on_exit EXIT
@@ -813,16 +909,21 @@ for ((index=0; index<total_experiments; index++)); do
         run_cleanup "${experiment_prefix}_0_" "${tag}_before_precreate" 'STEP 0-C 시작 전 cleanup 진행'
         record_event 'stage=PRECREATE_CLEANUP_SUCCESS'
     fi
-    begin_step TOPIC_ABSENCE_CHECK
-    record_event 'stage=TOPIC_ABSENCE_CHECK'
-    check_args=(apps AutoTopicProducerMetrics -b "$BROKERS" -p "$experiment_prefix"
-        --client-index 0 --start-index "$START_INDEX" --topic-cnt "$planned_topics"
-        --check-topics-absent --topic-prepare-timeout-seconds "$TOPIC_PREPARE_TIMEOUT_SECONDS")
-    record_command TOPIC_ABSENCE_COMMAND setsid bash "$RUNNER" "${check_args[@]}"
-    setsid bash "$RUNNER" "${check_args[@]}" >"$OUTPUT_DIR/${tag}_topic_check.log" 2>&1 &
-    job_pid=$!
-    wait_job 'STEP 0 토픽 충돌 검사' "$OUTPUT_DIR/${tag}_topic_check.log"
-    experiment_cleanup_allowed=true
+    if [[ "$TOPIC_MODE" == transient ]]; then
+        describe_step 'STEP 0: Transient 모드 — UUID로 토픽을 생성하므로 일반 토픽 이름 충돌 검사를 생략합니다.'
+        record_event 'stage=TOPIC_ABSENCE_CHECK status=SKIPPED reason=transient'
+    else
+        begin_step TOPIC_ABSENCE_CHECK
+        record_event 'stage=TOPIC_ABSENCE_CHECK'
+        check_args=(apps AutoTopicProducerMetrics -b "$BROKERS" -p "$experiment_prefix"
+            --client-index 0 --start-index "$START_INDEX" --topic-cnt "$planned_topics"
+            --check-topics-absent --topic-prepare-timeout-seconds "$TOPIC_PREPARE_TIMEOUT_SECONDS")
+        record_command TOPIC_ABSENCE_COMMAND setsid bash "$RUNNER" "${check_args[@]}"
+        setsid bash "$RUNNER" "${check_args[@]}" >"$OUTPUT_DIR/${tag}_topic_check.log" 2>&1 &
+        job_pid=$!
+        wait_job 'STEP 0 토픽 충돌 검사' "$OUTPUT_DIR/${tag}_topic_check.log"
+        experiment_cleanup_allowed=true
+    fi
     # fio가 만든 부하 상태를 유지하기 위해 TRIM은 사전 생성/fio보다 앞에서 실행한다.
     if [[ "$FSTRIM_ENABLED" == true ]]; then
         begin_step FSTRIM
@@ -880,7 +981,7 @@ for ((index=0; index<total_experiments; index++)); do
         printf -v extra_display '%q ' "$@"
         describe_step "  생산기에 추가 전달하는 인수: $extra_display (위 기본 설정과 중복되는 값은 실제 전달 명령도 확인하세요.)"
     fi
-    args=(apps AutoTopicProducerMetrics -b "$BROKERS" -p "$experiment_prefix"
+    args=(apps "$PRODUCER_CLASS" -b "$BROKERS" -p "$experiment_prefix"
         --start-index "$START_INDEX" --topic-cnt "$TOPIC_CNT" --topic-create-hz "$hz"
         --run-duration-minutes "$RUN_DURATION_MINUTES" --topic-lifetime-ms "$TOPIC_LIFETIME_MS"
         --produce-hz-per-topic "$PRODUCE_HZ_PER_TOPIC" --msg-size "$MSG_SIZE"
@@ -891,6 +992,8 @@ for ((index=0; index<total_experiments; index++)); do
     fi
     record_event 'stage=PRODUCER'
     record_command PRODUCER_COMMAND setsid bash "$RUNNER" "${args[@]}" "$@"
+    # Transient 준비 단계의 실패에는 클러스터 전체 reset이 필요하지 않다.
+    experiment_cleanup_allowed=true
     setsid bash "$RUNNER" "${args[@]}" "$@" >"$OUTPUT_DIR/${tag}_producer.log" 2>&1 &
     job_pid=$!
     # 삭제 기능 OFF일 때도 생산 경과를 표시하며, ON이면 삭제 상태를 함께 표시한다.
@@ -914,13 +1017,13 @@ for ((index=0; index<total_experiments; index++)); do
     fi
     # cleanup 시간과 대기 시간을 합쳐 최소 inter-experiment-delay-seconds를 확보한다.
     # 단일/마지막 실험도 cleanup을 켰으면 같은 정리 구간을 적용한다.
-    if [[ "$CLEANUP_ENABLED" == true ]] || (( index + 1 < total_experiments )); then
+    if [[ "$CLEANUP_ENABLED" == true || "$TOPIC_MODE" == transient ]] || (( index + 1 < total_experiments )); then
         begin_step CLEANUP
         cooldown_started=$SECONDS
         record_event "stage=COOLDOWN_START requested_seconds=$INTER_EXPERIMENT_DELAY_SECONDS"
         describe_step "STEP 5: 정리·대기 시작 — cleanup=$CLEANUP_ENABLED, 정리 시작부터 최소 ${INTER_EXPERIMENT_DELAY_SECONDS}초. cleanup 시간은 이 구간에 포함됩니다."
         if [[ "$CLEANUP_ENABLED" == false ]]; then
-            describe_step "  cleanup 생략 (--no-cleanup). 다음 반복 또는 Hz가 있으므로 대기만 수행합니다."
+            describe_step "  cleanup 생략 (--no-cleanup). 설정된 회차 간 대기만 수행합니다."
         else
             describe_step "  cleanup은 단일/마지막 Hz에도 적용합니다. 정리가 ${INTER_EXPERIMENT_DELAY_SECONDS}초를 초과하면 완료까지 기다리고, 삭제 제한 ${CLEANUP_TIMEOUT_SECONDS}초를 넘기면 중단합니다."
         fi

@@ -1,0 +1,73 @@
+# Kafka 실험 실행기
+
+`run_kafka_experiments.sh`는 Linux에서 실험 준비, 생산, 통계 수집과 정리를 수행한다.
+
+| `--topic-mode` | 생산 클래스 | 준비·정리 |
+| --- | --- | --- |
+| `auto` (기본값) | `AutoTopicProducerMetrics` | 토픽 충돌 검사, 생산 후 일반 토픽 cleanup |
+| `precreate` | `AutoTopicProducerMetrics` | 사전 cleanup·토픽 생성·준비 전송, 생산 후 일반 토픽 cleanup |
+| `transient` | `AutoTransientTopicProducerMetrics` | 워커에서 UUID 기반 생성, 선택적으로 Transient reset |
+
+## Transient 생산
+
+```bash
+bash run_kafka_experiments.sh --topic-mode transient --hz 3
+```
+
+`--all`, `--retry`, 생산 수치, fio, TRIM, 캐시 비우기, iostat와 결과 파일 관리 옵션은 공통으로 사용한다.
+fio·TRIM·캐시 비우기는 실험에서 기본 ON이다. 실행기는 Transient 모드에서 일반 토픽 충돌 검사,
+사전 생성, JMX 삭제기와 삭제 데몬 컴파일을 생략한다. `--delete`, `--ignore-response`와
+일반 토픽 준비 옵션은 사용할 수 없다. Transient Producer는 `acks=all`을 요구한다.
+
+apps JAR에는 이 생산 클래스와 커스텀 Kafka의 Transient API가 포함되어야 한다.
+빌드와 기존 JAR 재사용 모두에서 필요한 클래스의 존재를 확인한다.
+
+## Transient reset
+
+cleanup은 기본 ON이며, 생산 종료 후 `apps ResetTransientTopics`를 실행한다.
+이 앱은 `AdminClient.resetTransientTopics()`의 완료를 기다린 뒤 성공 시 0,
+오류·시간 초과 시 1, 대기 중 인터럽트 시 130으로 종료한다. `--no-cleanup`으로 reset을 생략할 수 있다.
+
+앱을 직접 사용하는 명령은 다음과 같다.
+
+```bash
+bash scripts/kafka_clients_run.sh apps ResetTransientTopics \
+  --bootstrap-server localhost:9092 --timeout-ms 300000
+```
+
+`-b`, `--brokers`도 브로커 옵션으로 사용할 수 있다. `--command-config FILE`로 Admin/security
+properties를 읽을 수 있으며, 명시한 브로커 인수가 파일의 `bootstrap.servers`보다 우선한다.
+`--help`는 Kafka에 연결하지 않는다.
+
+기존 외부 reset 스크립트를 사용하려면 기본 앱 대신 다음 옵션으로 지정한다.
+
+```bash
+bash run_kafka_experiments.sh --topic-mode transient --hz 3 \
+  --cleanup --transient-reset-script /path/to/reset-transient-topic.sh
+```
+
+실행기는 **클라이언트 호스트**에서 앱 또는 외부 스크립트를 실행한다. `--broker-ssh`를 사용해도
+클라이언트에서 Kafka API로 접속하는 형태다. 외부 스크립트의 인수는 다음과 같다.
+
+```text
+bash SCRIPT --bootstrap-server BROKERS --timeout-ms MILLISECONDS
+```
+
+`MILLISECONDS`는 `--cleanup-timeout-seconds`(기본 300초, 최대 86400초)를 변환한 값이다.
+스크립트는 reset 완료를 기다리고 성공 시 0, 실패 시 0 이외의 종료 코드를 반환해야 한다.
+실행기에도 같은 시간 제한이 적용된다.
+
+기존 JAR을 재사용할 때도 기본 reset 앱과 커스텀 reset API 클래스의 존재를 생산 전에 확인한다.
+
+reset은 PREFIX 범위 삭제가 아니라 **클러스터 전체 Transient 데이터·인덱스 초기화**다.
+모든 Transient 클라이언트를 종료하고 하나의 reset만 실행하는 실험 환경을 전제로 한다.
+reset 성공은 새 내부 토픽·코디네이터의 준비 완료를 뜻하며, 이전 로그 파일의 물리적 삭제 완료까지
+보장하지는 않는다.
+
+생산 프로세스 종료 후 reset하며, 단일·마지막 회차에도 적용한다. reset 시간은 회차 간 대기에 포함된다.
+생산 실패 시에도 프로세스를 종료한 뒤 reset에 성공해야 다음 회차로 진행한다.
+reset 실패·시간 초과는 자동 재시도하지 않고 전체 실행을 중단한다.
+`--no-cleanup`인 경우 실패 복구 reset도 생략하고 전체 실행을 중단한다.
+
+결과 파일명과 `.run.txt`에 `TOPIC_MODE`, `PRODUCER_CLASS`, `CLEANUP_POLICY`를 기록한다.
+reset 명령과 결과는 같은 회차의 `.run.txt` 및 `_reset.log`에서 확인할 수 있다.
