@@ -399,20 +399,27 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
 
             long topicCreateRequestMs = TimeUtils.getCurrentTimeMillis();
             try {
+                if (!running.get() || System.nanoTime() >= deadlineNanos) {
+                    return;
+                }
+
+                try {
+                    topic = await(producer.create(topicName), 60_000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.error("Topic creation interrupted. topic={}", topicName, e);
+                    return;
+                } catch (Exception e) {
+                    log.error("Failed to create topic. topic={}", topicName, e);
+                    return;
+                }
+                long responseMs = TimeUtils.getCurrentTimeMillis();
+                metrics.addTopicCreateLatency(responseMs - topicCreateRequestMs);
+
                 while (running.get() && System.nanoTime() < deadlineNanos) {
                     sleepUntil(nextProduceNanos);
                     if (!running.get() || System.nanoTime() >= deadlineNanos) {
                         break;
-                    }
-
-                    if (topic == null) {
-                        try {
-                            topic = await(producer.create(topicName), 60_000);
-                        } catch (Exception e) {
-                            continue;
-                        }
-                        long responseMs = TimeUtils.getCurrentTimeMillis();
-                        metrics.addTopicCreateLatency(responseMs - topicCreateRequestMs);
                     }
 
                     String messageId = topicName + "_" + sentCnt;
@@ -451,39 +458,45 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                     }
                 }
             } finally {
-                if (topic != null) {
-                    producer.seal(topic);
-                    producer.flush();
-                }
-                if (!shareProducer) {
-                    producer.flush();
-                    producer.close();
-                }
-                metrics.finish(sentCnt);
-                if (probe != null) {
-                    synchronized (timingWriter) {
-                        probe.write(timingWriter);
+                try {
+                    try {
+                        if (topic != null) {
+                            producer.flush();
+                            producer.seal(topic);
+                            producer.flush();
+                        }
+                    } finally {
+                        if (!shareProducer) {
+                            producer.close();
+                        }
                     }
+                } finally {
+                    metrics.finish(sentCnt);
+                    if (probe != null) {
+                        synchronized (timingWriter) {
+                            probe.write(timingWriter);
+                        }
+                    }
+                    if (metrics.callbackFailureCount.get() > 0) {
+                        log.error("Callback failure summary: kst={}, topic={}, callbackFailures={}, firstRecordFailures={}, logged={}, suppressed={}, sentCnt={}. Ordinary CSV missing count excludes AUTO first record.",
+                                java.time.OffsetDateTime.now(java.time.ZoneOffset.ofHours(9)), topicName,
+                                metrics.callbackFailureCount.get(), metrics.firstRecordFailureCount.get(),
+                                Math.min(5, metrics.callbackFailureCount.get()),
+                                Math.max(0, metrics.callbackFailureCount.get() - 5), sentCnt);
+                    }
+                    if (!statsDisabled) {
+                        topicResults.add(metrics.snapshotResult());
+                    }
+                    int remain = activeWorkers.decrementAndGet();
+                    log.info(
+                            "Topic worker stopped. topic={}, sentCnt={}, responseCnt={}, missingCnt={}, activeWorkers={}",
+                            topicName,
+                            sentCnt,
+                            metrics.produceSuccessCount(),
+                            metrics.produceMissingCount(),
+                            remain
+                    );
                 }
-                if (metrics.callbackFailureCount.get() > 0) {
-                    log.error("Callback failure summary: kst={}, topic={}, callbackFailures={}, firstRecordFailures={}, logged={}, suppressed={}, sentCnt={}. Ordinary CSV missing count excludes AUTO first record.",
-                            java.time.OffsetDateTime.now(java.time.ZoneOffset.ofHours(9)), topicName,
-                            metrics.callbackFailureCount.get(), metrics.firstRecordFailureCount.get(),
-                            Math.min(5, metrics.callbackFailureCount.get()),
-                            Math.max(0, metrics.callbackFailureCount.get() - 5), sentCnt);
-                }
-                if (!statsDisabled) {
-                    topicResults.add(metrics.snapshotResult());
-                }
-                int remain = activeWorkers.decrementAndGet();
-                log.info(
-                        "Topic worker stopped. topic={}, sentCnt={}, responseCnt={}, missingCnt={}, activeWorkers={}",
-                        topicName,
-                        sentCnt,
-                        metrics.produceSuccessCount(),
-                        metrics.produceMissingCount(),
-                        remain
-                );
             }
         }
     }
