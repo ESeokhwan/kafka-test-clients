@@ -28,13 +28,13 @@ if [ ! -f "$JAR_FILE" ]; then
     exit 1
 fi
 
-LOG4J_CONFIG_FILE="$BASE_DIR/config/log4j2.yaml"
+LOG4J_CONFIG_FILE="$BASE_DIR/config/log4j2.xml"
 echo "====================================================="
 echo "Module      : $MODULE"
 echo "Command     : $COMMAND"
 echo "JAR         : $JAR_FILE"
 echo "Main Class  : $TARGET_CLASS"
-echo "log4j2.yaml  : $LOG4J_CONFIG_FILE"
+echo "log4j2.xml  : $LOG4J_CONFIG_FILE"
 # shellcheck disable=SC2145
 echo "Arguments   : $@"
 echo "====================================================="
