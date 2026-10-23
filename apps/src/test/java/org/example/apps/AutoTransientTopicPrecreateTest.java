@@ -134,4 +134,53 @@ class AutoTransientTopicPrecreateTest {
             assertTrue(errors.toString().contains("--topic-prepare-timeout-seconds must be positive"));
         }
     }
+
+    @Test
+    void waitsForAllSealAcknowledgementsBeforeCompleting() throws Exception {
+        AutoTransientTopicProducerMetrics app = app("--topic-cnt", "2");
+        List<AutoTransientTopicProducerMetrics.PreparedTopic> topics = app.precreateTopics(
+                name -> CompletableFuture.completedFuture(handle(name)), deadline());
+        List<TransientTopicHandle> sealed = new ArrayList<>();
+        CompletableFuture<Void> lastCompletion = new CompletableFuture<>();
+        CountDownLatch lastRequested = new CountDownLatch(1);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> sealing = executor.submit(() -> {
+                app.sealPreparedTopics(topics, topic -> {
+                    sealed.add(topic);
+                    if (sealed.size() == 1) return CompletableFuture.completedFuture(null);
+                    lastRequested.countDown();
+                    return lastCompletion;
+                }, 5000);
+                return null;
+            });
+            assertTrue(lastRequested.await(2, TimeUnit.SECONDS));
+            assertThrows(TimeoutException.class, () -> sealing.get(50, TimeUnit.MILLISECONDS));
+            lastCompletion.complete(null);
+            sealing.get(2, TimeUnit.SECONDS);
+            assertEquals(topics.stream().map(AutoTransientTopicProducerMetrics.PreparedTopic::handle).toList(), sealed);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void failedSealIsReportedInsteadOfCompletingSuccessfully() throws Exception {
+        AutoTransientTopicProducerMetrics app = app("--topic-cnt", "1");
+        List<AutoTransientTopicProducerMetrics.PreparedTopic> topics = app.precreateTopics(
+                name -> CompletableFuture.completedFuture(handle(name)), deadline());
+        IllegalStateException failure = new IllegalStateException("seal rejected");
+        ExecutionException error = assertThrows(ExecutionException.class, () -> app.sealPreparedTopics(
+                topics, topic -> CompletableFuture.failedFuture(failure), 1000));
+        assertSame(failure, error.getCause());
+    }
+
+    @Test
+    void pendingSealTimesOutInsteadOfHanging() throws Exception {
+        AutoTransientTopicProducerMetrics app = app("--topic-cnt", "1");
+        List<AutoTransientTopicProducerMetrics.PreparedTopic> topics = app.precreateTopics(
+                name -> CompletableFuture.completedFuture(handle(name)), deadline());
+        assertThrows(TimeoutException.class, () -> app.sealPreparedTopics(
+                topics, topic -> new CompletableFuture<>(), 50));
+    }
 }

@@ -37,10 +37,12 @@ usage() {
       "원격: --remote-identity-file KEY --remote-stage-timeout-seconds 7200" \
       "빌드: --build (기본 ON) / --no-build (기존 apps JAR 재사용). 호출당 1회, 단독 모드 포함." \
       "반복: --retry N (각 Hz의 총 실행 횟수, 기본 1, 실패 재시도가 아닌 실험 반복)" \
-      "토픽: --topic-mode auto|precreate|transient (기본 auto), --topic-prepare-timeout-seconds 300" \
+      "토픽: --topic-mode auto|precreate|transient|transient-precreate (기본 auto)" \
+      "토픽 준비 제한: --topic-prepare-timeout-seconds 300" \
       "precreate: 토픽 생성 → 선택적 fio → 데이터 생산 → cleanup (--no-delete --cleanup 필수)" \
       "transient: AutoTransientTopicProducerMetrics 사용, 일반 토픽 검사·사전 생성·JMX 삭제 생략" \
-      "transient 정리: --cleanup (기본 ON)으로 apps ResetTransientTopics 실행, --no-cleanup으로 생략" \
+      "transient-precreate: 선택적 fio → Transient 전체 생성 → 전체 생산 완료 → 전체 seal → 선택적 reset" \
+      "Transient 정리: --cleanup (기본 ON)으로 apps ResetTransientTopics 실행, --no-cleanup으로 생략" \
       "reset 재정의: --transient-reset-script PATH (선택, 로컬 외부 reset 스크립트)" \
       "reset 인수: --bootstrap-server BROKERS --timeout-ms MS; 모든 Transient 클라이언트 종료 후 클러스터 전체 초기화" \
       "스위치: --fio / --no-fio, --delete / --no-delete, --cleanup / --no-cleanup" \
@@ -180,8 +182,12 @@ TOPIC_MODE="${TOPIC_MODE:-auto}"
 TOPIC_PREPARE_TIMEOUT_SECONDS="${TOPIC_PREPARE_TIMEOUT_SECONDS:-300}"
 TRANSIENT_RESET_SCRIPT="${TRANSIENT_RESET_SCRIPT:-}"
 PRODUCER_CLASS=AutoTopicProducerMetrics
-[[ "$TOPIC_MODE" == auto || "$TOPIC_MODE" == precreate || "$TOPIC_MODE" == transient ]] || fail "--topic-mode는 auto, precreate 또는 transient입니다."
-[[ "$mode" != experiment || "$TOPIC_MODE" == transient || "$CLEANUP_ENABLED" == true ]] || fail "동일 토픽 이름을 재사용하므로 일반 토픽 실험에서는 --cleanup이 필수입니다."
+case "$TOPIC_MODE" in
+    auto|precreate) TRANSIENT_MODE=false ;;
+    transient|transient-precreate) TRANSIENT_MODE=true ;;
+    *) fail "--topic-mode는 auto, precreate, transient 또는 transient-precreate입니다." ;;
+esac
+[[ "$mode" != experiment || "$TRANSIENT_MODE" == true || "$CLEANUP_ENABLED" == true ]] || fail "동일 토픽 이름을 재사용하므로 일반 토픽 실험에서는 --cleanup이 필수입니다."
 [[ "$TOPIC_PREPARE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]{0,4}$ ]] || fail "토픽 준비 제한 시간은 1~99999초입니다."
 if [[ "$TOPIC_MODE" == precreate ]]; then
     [[ "$mode" == experiment && "$DELETE_ENABLED" == false && "$CLEANUP_ENABLED" == true ]] || fail "precreate는 실험 모드에서 --no-delete --cleanup으로 실행하세요. 생산 전 빈 토픽 삭제를 방지합니다."
@@ -207,14 +213,20 @@ DELETE_START_TIMEOUT_SECONDS="${DELETE_START_TIMEOUT_SECONDS:-60}"
 for value in "$FIO_ENABLED" "$DELETE_ENABLED" "$CLEANUP_ENABLED" "$STATS_DISABLED" "$IOSTAT_ENABLED" "$DROP_CACHES" "$BUILD_ENABLED"; do
     [[ "$value" == true || "$value" == false ]] || fail "기능 스위치는 true/false로 지정하세요."
 done
-if [[ "$TOPIC_MODE" == transient ]]; then
-    [[ "$mode" == experiment ]] || fail "--topic-mode transient는 실험 모드(--all/--hz)에서만 지원합니다."
-    [[ "$DELETE_ENABLED" == false ]] || fail "transient 모드에서는 일반 토픽 JMX 삭제기(--delete)를 사용할 수 없습니다."
+if [[ "$TRANSIENT_MODE" == true ]]; then
+    [[ "$mode" == experiment ]] || fail "--topic-mode $TOPIC_MODE 모드는 실험 모드(--all/--hz)에서만 지원합니다."
+    [[ "$DELETE_ENABLED" == false ]] || fail "$TOPIC_MODE 모드에서는 일반 토픽 JMX 삭제기(--delete)를 사용할 수 없습니다."
     for arg in "$@"; do
         case "$arg" in
-            --ignore-response|--ignore-response=*) fail "transient 모드는 acks=all이 필요하므로 --ignore-response를 사용할 수 없습니다." ;;
-            --check-topics-absent*|--prepare-topics-only*|--require-existing-topics*) fail "transient 모드에서는 일반 토픽 준비 옵션을 사용할 수 없습니다: $arg" ;;
+            --ignore-response|--ignore-response=*) fail "$TOPIC_MODE 모드는 acks=all이 필요하므로 --ignore-response를 사용할 수 없습니다." ;;
+            --check-topics-absent*|--prepare-topics-only*|--require-existing-topics*) fail "$TOPIC_MODE 모드에서는 일반 토픽 준비 옵션을 사용할 수 없습니다: $arg" ;;
         esac
+        if [[ "$TOPIC_MODE" == transient-precreate ]]; then
+            case "$arg" in
+                --precreate|--precreate=*|--topic-prepare-timeout-seconds*)
+                    fail "transient-precreate의 사전 생성/준비 제한은 실행기가 관리합니다: $arg (--topic-prepare-timeout-seconds를 -- 앞에 지정하세요)" ;;
+            esac
+        fi
     done
     if [[ "$CLEANUP_ENABLED" == true ]]; then
         if [[ -n "$TRANSIENT_RESET_SCRIPT" ]]; then
@@ -226,7 +238,7 @@ if [[ "$TOPIC_MODE" == transient ]]; then
 fi
 CLEANUP_POLICY=none
 if [[ "$CLEANUP_ENABLED" == true ]]; then
-    if [[ "$TOPIC_MODE" == transient ]]; then CLEANUP_POLICY=reset-transient-topics
+    if [[ "$TRANSIENT_MODE" == true ]]; then CLEANUP_POLICY=reset-transient-topics
     else CLEANUP_POLICY=delete-topics; fi
 fi
 [[ "$INTER_EXPERIMENT_DELAY_SECONDS" =~ ^[0-9]{1,6}$ ]] || fail "딜레이는 0 이상의 정수입니다."
@@ -455,7 +467,7 @@ on_exit() {
             echo '시작 전 준비/검사 실패: 추가 복구 삭제 없이 전체 실행을 중단합니다.' >&2
             complete_exit "$status"
         fi
-        if [[ "$TOPIC_MODE" == transient ]]; then
+        if [[ "$TRANSIENT_MODE" == true ]]; then
             if [[ "$CLEANUP_ENABLED" == false || "${transient_reset_attempted:-false}" == true ]]; then
                 # reset 실패/시간 초과는 부분 초기화일 수 있으므로 자동으로 재시도하지 않는다.
                 record_event "status=RECOVERY_SKIPPED cleanup_policy=$CLEANUP_POLICY reset_attempted=${transient_reset_attempted:-false} next_experiment_allowed=false"
@@ -646,7 +658,7 @@ start_delete() {
 }
 run_cleanup() {
     local scope="$1" tag="$2" progress_label="${3:-STEP 5 cleanup 진행}"
-    if [[ "$TOPIC_MODE" == transient ]]; then
+    if [[ "$TRANSIENT_MODE" == true ]]; then
         run_transient_reset "$tag" "$progress_label"
         return 0
     fi
@@ -761,7 +773,7 @@ build_producer_jar() {
     record_file=""
 }
 build_producer_jar
-if [[ "$mode" == experiment && "$TOPIC_MODE" == transient ]]; then
+if [[ "$mode" == experiment && "$TRANSIENT_MODE" == true ]]; then
     # --no-build/원격 빌드의 JAR에 필요한 클래스가 있는지 장시간 준비 전에 확인한다.
     record_file="$build_metadata"
     "$PYTHON" - "$built_jar" "$CLEANUP_ENABLED" "$TRANSIENT_RESET_SCRIPT" <<'PY' || fail "Transient 생산기/reset 앱과 커스텀 Kafka API를 포함한 apps JAR이 필요합니다. --build와 CUSTOM_KAFKA_PATH를 확인하세요."
@@ -792,7 +804,7 @@ fi
 if [[ -z "$BROKER_SSH" && ( "$mode" == fio || ( "$mode" == experiment && "$FIO_ENABLED" == true ) ) ]]; then
     [[ -f "$FIO_SCRIPT" ]] || fail "fio 스크립트가 없습니다: $FIO_SCRIPT"
 fi
-if [[ "$mode" == delete || "$mode" == cleanup || ( "$mode" == experiment && "$TOPIC_MODE" != transient ) ]]; then
+if [[ "$mode" == delete || "$mode" == cleanup || ( "$mode" == experiment && "$TRANSIENT_MODE" == false ) ]]; then
     # 정상 cleanup OFF여도 실패 복구용 cleanup은 항상 준비한다.
     prepare_daemon
 fi
@@ -911,7 +923,7 @@ for ((index=0; index<total_experiments; index++)); do
         run_cleanup "${experiment_prefix}_0_" "${tag}_before_precreate" 'STEP 0-C 시작 전 cleanup 진행'
         record_event 'stage=PRECREATE_CLEANUP_SUCCESS'
     fi
-    if [[ "$TOPIC_MODE" == transient ]]; then
+    if [[ "$TRANSIENT_MODE" == true ]]; then
         describe_step 'STEP 0: Transient 모드 — UUID로 토픽을 생성하므로 일반 토픽 이름 충돌 검사를 생략합니다.'
         record_event 'stage=TOPIC_ABSENCE_CHECK status=SKIPPED reason=transient'
     else
@@ -974,6 +986,9 @@ for ((index=0; index<total_experiments; index++)); do
     describe_step "  시간 설정은 토픽 수 계산용입니다. 실제 종료에는 마지막 작업자의 생산·전송 마무리 시간이 추가됩니다. brokers=$BROKERS"
     describe_step "  남은 시간은 설정된 ${RUN_DURATION_MINUTES}분 기준이며 실제 종료 예상 시간이 아닙니다. 0초 이후에도 생산이 끝날 때까지 기다립니다."
     describe_step "  생산 로그=$OUTPUT_DIR/${tag}_producer.log, 설정 기록=$record_file"
+    if [[ "$TOPIC_MODE" == transient-precreate ]]; then
+        describe_step "  Transient 사전 생성 ON: 토픽 ${planned_topics}개 생성 응답을 모두 받은 뒤 생산하고, 모든 워커가 끝나면 전체 seal합니다. 전체 준비 제한=${TOPIC_PREPARE_TIMEOUT_SECONDS}초."
+    fi
     if [[ "$STATS_DISABLED" == true ]]; then
         describe_step "  생산 통계 OFF (--stats-disabled). 생산 CSV 생성 확인을 생략합니다."
     else
@@ -992,12 +1007,15 @@ for ((index=0; index<total_experiments; index++)); do
     if [[ "$TOPIC_MODE" == precreate ]]; then
         args+=(--require-existing-topics --topic-prepare-timeout-seconds "$TOPIC_PREPARE_TIMEOUT_SECONDS")
     fi
-    if [[ "$TOPIC_MODE" == transient ]]; then
+    if [[ "$TRANSIENT_MODE" == true ]]; then
         args+=(--full-file "$full_file")
+    fi
+    if [[ "$TOPIC_MODE" == transient-precreate ]]; then
+        args+=(--precreate --topic-prepare-timeout-seconds "$TOPIC_PREPARE_TIMEOUT_SECONDS")
     fi
     record_event 'stage=PRODUCER'
     record_command PRODUCER_COMMAND setsid bash "$RUNNER" "${args[@]}" "$@"
-    # Transient 준비 단계의 실패에는 클러스터 전체 reset이 필요하지 않다.
+    # 생산기 실행부터는 사전 생성 중 일부 토픽이 생길 수 있으므로 실패 시 reset 대상으로 둔다.
     experiment_cleanup_allowed=true
     setsid bash "$RUNNER" "${args[@]}" "$@" >"$OUTPUT_DIR/${tag}_producer.log" 2>&1 &
     job_pid=$!
@@ -1022,7 +1040,7 @@ for ((index=0; index<total_experiments; index++)); do
     fi
     # cleanup 시간과 대기 시간을 합쳐 최소 inter-experiment-delay-seconds를 확보한다.
     # 단일/마지막 실험도 cleanup을 켰으면 같은 정리 구간을 적용한다.
-    if [[ "$CLEANUP_ENABLED" == true || "$TOPIC_MODE" == transient ]] || (( index + 1 < total_experiments )); then
+    if [[ "$CLEANUP_ENABLED" == true || "$TRANSIENT_MODE" == true ]] || (( index + 1 < total_experiments )); then
         begin_step CLEANUP
         cooldown_started=$SECONDS
         record_event "stage=COOLDOWN_START requested_seconds=$INTER_EXPERIMENT_DELAY_SECONDS"

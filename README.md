@@ -7,6 +7,7 @@
 | `auto` (기본값) | `AutoTopicProducerMetrics` | 토픽 충돌 검사, 생산 후 일반 토픽 cleanup |
 | `precreate` | `AutoTopicProducerMetrics` | 사전 cleanup·토픽 생성·준비 전송, 생산 후 일반 토픽 cleanup |
 | `transient` | `AutoTransientTopicProducerMetrics` | 워커에서 UUID 기반 생성, 선택적으로 Transient reset |
+| `transient-precreate` | `AutoTransientTopicProducerMetrics --precreate` | 전체 사전 생성, 전체 생산 완료 후 전체 seal, 선택적으로 Transient reset |
 
 ## Transient 생산
 
@@ -15,12 +16,28 @@ bash run_kafka_experiments.sh --topic-mode transient --hz 3
 ```
 
 `--all`, `--retry`, 생산 수치, fio, TRIM, 캐시 비우기, iostat와 결과 파일 관리 옵션은 공통으로 사용한다.
-fio·TRIM·캐시 비우기는 실험에서 기본 ON이다. 실행기는 Transient 모드에서 일반 토픽 충돌 검사,
-사전 생성, JMX 삭제기와 삭제 데몬 컴파일을 생략한다. `--delete`, `--ignore-response`와
+fio·TRIM·캐시 비우기는 실험에서 기본 ON이다. 실행기는 두 Transient 모드에서 일반 토픽의 충돌 검사·
+사전 생성과 JMX 삭제기·삭제 데몬 컴파일을 생략한다. `--delete`, `--ignore-response`와
 일반 토픽 준비 옵션은 사용할 수 없다. Transient Producer는 `acks=all`을 요구한다.
 
 apps JAR에는 이 생산 클래스와 커스텀 Kafka의 Transient API가 포함되어야 한다.
 빌드와 기존 JAR 재사용 모두에서 필요한 클래스의 존재를 확인한다.
+
+Transient 토픽을 모두 생성한 다음 생산하려면 `transient-precreate` 모드를 사용한다.
+
+```bash
+bash run_kafka_experiments.sh --topic-mode transient-precreate --hz 3 \
+  --topic-prepare-timeout-seconds 600
+```
+
+`--topic-cnt`로 지정한 수(미지정 시 Hz와 실행 시간으로 계산)의 모든 생성 응답을 기다린 뒤,
+기존 Hz 간격으로 생산 워커를 시작한다. 준비 시간은 각 워커의 `--topic-lifetime-ms`에 포함하지 않는다.
+생성 실패나 준비 시간 초과가 발생하면 메시지 생산을 시작하지 않는다. 전체 준비 제한 시간은
+`--topic-prepare-timeout-seconds`로 지정하며 기본값은 300초다. 실행기가 생산기에 `--precreate`와
+준비 제한 시간을 전달한다. 선택적 fio 이후에 생산기 내부에서 전체 생성 → 생산을 수행한다.
+이 모드에서는 개별 워커 종료 시 seal하지 않고, 모든 워커의 생산·flush·종료가 끝난 뒤 전체 토픽을
+seal하고 응답을 기다린다. 이후 cleanup이 켜져 있으면 기존 Transient 모드와 같이 reset한다.
+일반 토픽용 `--topic-mode precreate`는 별도의 모드다.
 
 ## Transient reset
 

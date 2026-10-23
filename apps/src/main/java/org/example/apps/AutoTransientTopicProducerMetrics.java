@@ -217,6 +217,9 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
             timingEpochNanos = System.nanoTime();
             launchTopicWorkers(preparedTopics);
             joinWorkers();
+            if (precreate && running.get()) {
+                sealPreparedTopics(preparedTopics);
+            }
         } finally {
             try {
                 cleanupWorkers();
@@ -328,6 +331,33 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     }
 
     record PreparedTopic(TransientTopicHandle handle, long requestMs, long latencyMs) {}
+
+    private void sealPreparedTopics(List<PreparedTopic> topics) {
+        log.info("All produce workers finished. Sealing precreated transient topics. count={}", topics.size());
+        try (KafkaTransientProducer<String, String> producer = new KafkaTransientProducer<>(
+                createProducerConfig(prefix + "_seal"))) {
+            sealPreparedTopics(topics, producer::seal,
+                    callbackConfig.getInt(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Transient topic sealing interrupted", e);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to seal precreated transient topics", e);
+        }
+    }
+
+    void sealPreparedTopics(List<PreparedTopic> topics,
+            Function<TransientTopicHandle, Future<?>> seal, long timeoutMs) throws Exception {
+        for (int i = 0; i < topics.size(); i++) {
+            if (!running.get() || Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("Transient topic sealing stopped");
+            }
+            await(seal.apply(topics.get(i).handle()), timeoutMs);
+            if ((i + 1) % 100 == 0 || i + 1 == topics.size()) {
+                log.info("Transient topic sealing: sealed={}/{}", i + 1, topics.size());
+            }
+        }
+    }
 
     private void launchTopicWorkers(List<PreparedTopic> preparedTopics) {
         long topicCreateIntervalNanos = hzToIntervalNanos(topicCreateHz);
@@ -547,8 +577,11 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                     try {
                         if (topic != null) {
                             producer.flush();
-                            producer.seal(topic);
-                            producer.flush();
+                            // 사전 생성 모드는 모든 워커의 생산/flush 완료 후 메인 스레드에서 seal한다.
+                            if (!precreate) {
+                                producer.seal(topic);
+                                producer.flush();
+                            }
                         }
                     } finally {
                         if (!shareProducer) {
