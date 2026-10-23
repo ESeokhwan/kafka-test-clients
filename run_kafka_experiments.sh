@@ -854,6 +854,7 @@ for ((index=0; index<total_experiments; index++)); do
     # 모든 Hz/반복에서 같은 토픽 이름을 재사용하며 결과 파일만 고유 태그로 분리한다.
     experiment_prefix="$PREFIX"
     metrics_file="$OUTPUT_DIR/${tag}_metrics.csv"
+    full_file="$OUTPUT_DIR/${tag}_full.csv"
     # 조건문으로 감싸면 errexit가 무효화되므로 독립 서브셸로 실행한다.
     set +e
     (
@@ -875,6 +876,7 @@ for ((index=0; index<total_experiments; index++)); do
     fi
     tag="${round_directory}_end_PENDING"
     metrics_file="$OUTPUT_DIR/${tag}_metrics.csv"
+    full_file="$OUTPUT_DIR/${tag}_full.csv"
     round_started=true
     experiment_cleanup_allowed=false
     previous_step=""
@@ -989,6 +991,9 @@ for ((index=0; index<total_experiments; index++)); do
     [[ "$STATS_DISABLED" == false ]] || args+=(--stats-disabled)
     if [[ "$TOPIC_MODE" == precreate ]]; then
         args+=(--require-existing-topics --topic-prepare-timeout-seconds "$TOPIC_PREPARE_TIMEOUT_SECONDS")
+    fi
+    if [[ "$TOPIC_MODE" == transient ]]; then
+        args+=(--full-file "$full_file")
     fi
     record_event 'stage=PRODUCER'
     record_command PRODUCER_COMMAND setsid bash "$RUNNER" "${args[@]}" "$@"

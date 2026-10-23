@@ -17,6 +17,13 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import moniq.JsonBasedLatencyMonitorLog;
+import moniq.MonitorQueue;
+import moniq.util.BasicRandomPayloadGenerator;
+import moniq.util.FastJsonBasedLatencyMonitoringMessageGenerator;
+import moniq.util.ILatencyMonitoringMessageAdaptor;
+import moniq.writer.MonitorLogWriter;
+import moniq.writer.strategy.CsvMonitorLogWriteStrategy;
 import org.apache.kafka.clients.producer.KafkaTransientProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.TransientCallback;
@@ -113,6 +120,9 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     @Option(names = {"--metrics-file", "--produce-stats-file"}, description = "Output CSV file for per-topic produce statistics plus topic creation latency")
     private String metricsFile = "auto_transient_topic_producer_metrics.csv";
 
+    @Option(names = {"--full-file"}, description = "Output CSV file all produce request's latency")
+    private String fullDataFile = "transient_topic_producer_full.csv";
+
     @Option(names = {"--stats-disabled"}, description = "If true, per-topic stats CSV files will not be created. Default: false")
     private boolean statsDisabled = false;
 
@@ -130,6 +140,12 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     private KafkaTransientProducer<String, String> sharedProducer;
     // 유효 기본값을 포함한 진단용 설정. 전송 옵션 자체는 변경하지 않는다.
     private ProducerConfig callbackConfig;
+
+    private final MonitorQueue newMonitoringQueue = new MonitorQueue();
+    private MonitorLogWriter newMonitorLogWriter;
+    private Thread newMonitorLogWriterThread;
+    private final ILatencyMonitoringMessageAdaptor messageAdaptor =
+        new FastJsonBasedLatencyMonitoringMessageGenerator(0, new BasicRandomPayloadGenerator(1));
 
     private final Thread emergencyCleanupHook = new Thread(() -> {
         log.info("Shutdown hook triggered, exiting application.");
@@ -150,6 +166,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     @Override
     public void run() {
         validateOptions();
+        initMonitor();
         Runtime.getRuntime().addShutdownHook(emergencyCleanupHook);
         warnDeprecatedOutputOptions();
         callbackConfig = new ProducerConfig(createProducerConfig(prefix + "_diagnostic"));
@@ -201,6 +218,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                     if (failed) throw new IllegalStateException("Timing diagnostics write failed");
                 }
             }
+            cleanupLogWriter();
         }
         writeMetricsFile();
         Runtime.getRuntime().removeShutdownHook(emergencyCleanupHook);
@@ -434,6 +452,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                         requestMs,
                         topicCreateRequestMs,
                         metrics,
+                        topicName,
                         sentCnt,
                         enteredSend
                     );
@@ -509,6 +528,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         private final long requestMs;
         private final long topicCreateRequestMs;
         private final TopicMetrics metrics;
+        private final String topicName;
         private final int messageIndex;
         private final long requestNanos;
         private ProducerTimingProbe.Sample timingSample;
@@ -517,12 +537,14 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                 long requestMs,
                 long topicCreateRequestMs,
                 TopicMetrics metrics,
+                String topicName,
                 int messageIndex,
                 long requestNanos
         ) {
             this.requestMs = requestMs;
             this.topicCreateRequestMs = topicCreateRequestMs;
             this.metrics = metrics;
+            this.topicName = topicName;
             this.messageIndex = messageIndex;
             this.requestNanos = requestNanos;
         }
@@ -531,6 +553,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         public void onCompletion(TransientRecordMetadata metadata, Exception exception) {
             // 기존 latency에 진단 집계 소요시간을 섞지 않도록 응답 시각부터 확보한다.
             long responseMs = TimeUtils.getCurrentTimeMillis();
+            String monitorLog = messageAdaptor.generate(topicName + "_" + messageIndex, requestMs);
             if (timingSample != null) timingSample.completed(System.nanoTime(), exception != null);
             // 실패는 ignoreResponse 여부와 무관하게 집계한다. 성공 통계/전송 방식은 그대로 유지한다.
             if (exception != null) {
@@ -555,6 +578,28 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                 return;
             }
             metrics.addProduceLatency(responseMs - requestMs);
+            newMonitoringQueue.enqueue(new JsonBasedLatencyMonitorLog(messageAdaptor, monitorLog, "SUCCESS", responseMs));
+            newMonitorLogWriter.notifyIfNeeded();
+        }
+    }
+
+    private void initMonitor() {
+        newMonitorLogWriter = new MonitorLogWriter(
+            newMonitoringQueue,
+            new CsvMonitorLogWriteStrategy(normalizeCsvPath(fullDataFile)),
+            monitoringBatchSize
+        );
+        newMonitorLogWriterThread = new Thread(newMonitorLogWriter);
+        newMonitorLogWriterThread.start();
+    }
+
+    private void cleanupLogWriter() {
+        newMonitorLogWriter.gracefulShutdown();
+        newMonitorLogWriter.syncedNotify();
+        try {
+            newMonitorLogWriterThread.join();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         }
     }
 
