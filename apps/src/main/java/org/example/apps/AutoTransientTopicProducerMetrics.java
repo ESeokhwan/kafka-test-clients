@@ -369,7 +369,12 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
 
             String topicName = topicName(i);
             Thread workerThread = new Thread(
-                    new TransientTopicWorker(topicName, topicName, precreate ? preparedTopics.get(i) : null),
+                    new TransientTopicWorker(
+                            topicName,
+                            topicName,
+                            precreate ? preparedTopics.get(i) : null,
+                            needFullRecord(targetTopicCnt, 5, i)
+                    ),
                     "AutoTopicProducerMetrics-" + topicName
             );
             workerThreads.add(workerThread);
@@ -377,6 +382,22 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
 
             nextLaunchNanos += topicCreateIntervalNanos;
         }
+    }
+
+    private static boolean needFullRecord(int n, int p, int x) {
+        if (n < 1 || p < 0 || p > n) {
+            return false;
+        }
+        if (x < 0 || x >= n || p == 0) return false;
+        if (p == 1) return x == 0;
+
+        long range = n - 1L;
+        long steps = p - 1L;
+
+        long index = (x * steps + range / 2) / range;
+        long selected = (index * range + steps / 2) / steps;
+
+        return selected == x;
     }
 
     private void joinWorkers() {
@@ -467,14 +488,16 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         private final String topicName;
         private final String clientId;
         private final PreparedTopic preparedTopic;
+        private final boolean needFullRecord;
 
         private TransientTopicHandle topic;
 
-        private TransientTopicWorker(String topicName, String clientId, PreparedTopic preparedTopic) {
+        private TransientTopicWorker(String topicName, String clientId, PreparedTopic preparedTopic, boolean needFullRecord) {
             this.topicName = topicName;
             this.clientId = clientId;
             this.preparedTopic = preparedTopic;
             this.topic = preparedTopic == null ? null : preparedTopic.handle();
+            this.needFullRecord = needFullRecord;
         }
 
         @Override
@@ -550,7 +573,8 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                         metrics,
                         topicName,
                         sentCnt,
-                        enteredSend
+                        enteredSend,
+                        needFullRecord
                     );
                     callback.timingSample = sample;
                     try {
@@ -630,6 +654,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         private final String topicName;
         private final int messageIndex;
         private final long requestNanos;
+        private final boolean needFullRecrod;
         private ProducerTimingProbe.Sample timingSample;
 
         private TransientTopicProducerCallback(
@@ -638,7 +663,8 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                 TopicMetrics metrics,
                 String topicName,
                 int messageIndex,
-                long requestNanos
+                long requestNanos,
+                boolean needFullRecord
         ) {
             this.requestMs = requestMs;
             this.topicCreateRequestMs = topicCreateRequestMs;
@@ -646,6 +672,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
             this.topicName = topicName;
             this.messageIndex = messageIndex;
             this.requestNanos = requestNanos;
+            this.needFullRecrod = needFullRecord;
         }
 
         @Override
@@ -677,8 +704,11 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                 return;
             }
             metrics.addProduceLatency(responseMs - requestMs);
-            newMonitoringQueue.enqueue(new JsonBasedLatencyMonitorLog(messageAdaptor, monitorLog, "SUCCESS", responseMs));
-            newMonitorLogWriter.notifyIfNeeded();
+            if (needFullRecrod) {
+                newMonitoringQueue.enqueue(
+                    new JsonBasedLatencyMonitorLog(messageAdaptor, monitorLog, "SUCCESS", responseMs));
+                newMonitorLogWriter.notifyIfNeeded();
+            }
         }
     }
 
