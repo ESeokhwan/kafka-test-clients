@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -17,6 +18,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 import moniq.JsonBasedLatencyMonitorLog;
 import moniq.MonitorQueue;
 import moniq.util.BasicRandomPayloadGenerator;
@@ -61,7 +63,10 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     @Option(names = {"--topic-cnt"}, description = "Total number of topics to start. If <= 0, derived from topic-create-hz and run-duration-minutes. Default: -1")
     private int topicCnt = -1;
 
-    @Option(names = "--topic-prepare-timeout-seconds")
+    @Option(names = "--precreate", description = "Create all transient topics before starting any produce workers. Default: false")
+    private boolean precreate;
+
+    @Option(names = "--topic-prepare-timeout-seconds", description = "Timeout for the entire --precreate phase. Default: 300")
     private int topicPrepareTimeoutSeconds = 300;
 
     @Option(names = {"--topic-create-hz"}, description = "New topic producer start rate. Default: 5.0")
@@ -153,7 +158,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         cleanupWorkers();
         waitForWorkers(TimeUnit.SECONDS.toMillis(10));
         writeMetricsFile();
-        cleanupMonitor();
+        cleanupLogWriter();
     });
 
     public static void main(String[] args) {
@@ -181,7 +186,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         }
 
         log.info(
-                "AutoTopicProducerMetrics starting. topicCreateHz={}, topicCreateIntervalMs={}, expectedActiveTopics={}, runDurationMinutes={}, topicCnt={}, topicLifetimeMs={}, produceHzPerTopic={}, expectedSteadyRate={} msg/sec, metricsFile={}, statsDisabled={}",
+                "AutoTopicProducerMetrics starting. topicCreateHz={}, topicCreateIntervalMs={}, expectedActiveTopics={}, runDurationMinutes={}, topicCnt={}, topicLifetimeMs={}, produceHzPerTopic={}, expectedSteadyRate={} msg/sec, metricsFile={}, statsDisabled={}, precreate={}",
                 topicCreateHz,
                 TimeUnit.NANOSECONDS.toMillis(hzToIntervalNanos(topicCreateHz)),
                 expectedActiveTopics(),
@@ -191,34 +196,43 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                 produceHzPerTopic,
                 expectedActiveTopics() * produceHzPerTopic,
                 normalizeCsvPath(metricsFile),
-                statsDisabled
+                statsDisabled,
+                precreate
         );
 
-        startBarrier(startBarrierDelay);
-        if (timingDiagnostics) {
-            String path = normalizeCsvPath(metricsFile).replaceFirst("\\.csv$", "_timing.csv");
-            try {
-                timingWriter = new PrintWriter(new BufferedWriter(new FileWriter(path, false)));
-                ProducerTimingProbe.header(timingWriter);
-                log.info("Timing diagnostics: file={}, phaseJitterMs={}, phaseSeed={}, histogramBucketUs=100",
-                        path, sendPhaseJitterMs, sendPhaseSeed);
-            } catch (IOException e) {
-                throw new RuntimeException("Cannot create timing diagnostics file", e);
-            }
-        }
-        timingEpochNanos = System.nanoTime();
         try {
-            launchTopicWorkers();
-            joinWorkers();
-        } finally {
-            if (timingWriter != null) {
-                synchronized (timingWriter) {
-                    boolean failed = timingWriter.checkError();
-                    timingWriter.close();
-                    if (failed) throw new IllegalStateException("Timing diagnostics write failed");
+            List<PreparedTopic> preparedTopics = precreate ? precreateTopics() : List.of();
+            startBarrier(startBarrierDelay);
+            if (timingDiagnostics) {
+                String path = normalizeCsvPath(metricsFile).replaceFirst("\\.csv$", "_timing.csv");
+                try {
+                    timingWriter = new PrintWriter(new BufferedWriter(new FileWriter(path, false)));
+                    ProducerTimingProbe.header(timingWriter);
+                    log.info("Timing diagnostics: file={}, phaseJitterMs={}, phaseSeed={}, histogramBucketUs=100",
+                            path, sendPhaseJitterMs, sendPhaseSeed);
+                } catch (IOException e) {
+                    throw new RuntimeException("Cannot create timing diagnostics file", e);
                 }
             }
-            cleanupLogWriter();
+            timingEpochNanos = System.nanoTime();
+            launchTopicWorkers(preparedTopics);
+            joinWorkers();
+        } finally {
+            try {
+                cleanupWorkers();
+            } finally {
+                try {
+                    if (timingWriter != null) {
+                        synchronized (timingWriter) {
+                            boolean failed = timingWriter.checkError();
+                            timingWriter.close();
+                            if (failed) throw new IllegalStateException("Timing diagnostics write failed");
+                        }
+                    }
+                } finally {
+                    cleanupLogWriter();
+                }
+            }
         }
         writeMetricsFile();
         Runtime.getRuntime().removeShutdownHook(emergencyCleanupHook);
@@ -231,6 +245,9 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     }
 
     private void validateOptions() {
+        if (precreate && topicPrepareTimeoutSeconds < 1) {
+            throw new IllegalArgumentException("--topic-prepare-timeout-seconds must be positive");
+        }
         if (timingDiagnostics && ignoreResponse) {
             throw new IllegalArgumentException("Timing ACK diagnostics requires responses; remove --ignore-response");
         }
@@ -267,7 +284,52 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         }
     }
 
-    private void launchTopicWorkers() {
+    private List<PreparedTopic> precreateTopics() {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(topicPrepareTimeoutSeconds);
+        log.info("Transient topic precreation starting. count={}, timeoutSeconds={}",
+                effectiveTopicCnt(), topicPrepareTimeoutSeconds);
+        KafkaTransientProducer<String, String> producer = new KafkaTransientProducer<>(
+                createProducerConfig(prefix + "_precreate"));
+        try {
+            return precreateTopics(producer::create, deadline);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Transient topic precreation interrupted; production has not started", e);
+        } catch (Exception e) {
+            throw new IllegalStateException("Transient topic precreation failed; production has not started", e);
+        } finally {
+            // UUID 핸들은 준비용 Producer를 닫은 뒤에도 생산 워커에서 재사용할 수 있다.
+            producer.close(Duration.ofNanos(Math.max(0L, deadline - System.nanoTime())));
+        }
+    }
+
+    List<PreparedTopic> precreateTopics(
+            Function<String, Future<TransientTopicHandle>> create, long deadline) throws Exception {
+        int count = effectiveTopicCnt();
+        List<PreparedTopic> topics = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            if (!running.get() || Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("Transient topic precreation stopped");
+            }
+            remainingPrepareMs(deadline);
+            long requestedAt = TimeUtils.getCurrentTimeMillis();
+            TransientTopicHandle handle = await(create.apply(topicName(i)), remainingPrepareMs(deadline));
+            topics.add(new PreparedTopic(handle, requestedAt, TimeUtils.getCurrentTimeMillis() - requestedAt));
+            if ((i + 1) % 100 == 0 || i + 1 == count) {
+                log.info("Transient topic precreation: ready={}/{}", i + 1, count);
+            }
+        }
+        log.info("All transient topics created. count={}; starting production phase", count);
+        return topics;
+    }
+
+    private String topicName(int offset) {
+        return prefix + "_" + clientIndex + "_" + (startIndex + offset);
+    }
+
+    record PreparedTopic(TransientTopicHandle handle, long requestMs, long latencyMs) {}
+
+    private void launchTopicWorkers(List<PreparedTopic> preparedTopics) {
         long topicCreateIntervalNanos = hzToIntervalNanos(topicCreateHz);
         long nextLaunchNanos = System.nanoTime();
         int targetTopicCnt = effectiveTopicCnt();
@@ -275,10 +337,9 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         for (int i = 0; i < targetTopicCnt && running.get(); i++) {
             sleepUntil(nextLaunchNanos);
 
-            int topicIndex = startIndex + i;
-            String topicName = prefix + "_" + clientIndex + "_" + topicIndex;
+            String topicName = topicName(i);
             Thread workerThread = new Thread(
-                    new TransientTopicWorker(topicName, prefix + "_" + clientIndex + "_" + topicIndex),
+                    new TransientTopicWorker(topicName, topicName, precreate ? preparedTopics.get(i) : null),
                     "AutoTopicProducerMetrics-" + topicName
             );
             workerThreads.add(workerThread);
@@ -298,8 +359,6 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                 break;
             }
         }
-
-        cleanupWorkers();
     }
 
     private void cleanupWorkers() {
@@ -377,12 +436,15 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     private class TransientTopicWorker implements Runnable {
         private final String topicName;
         private final String clientId;
+        private final PreparedTopic preparedTopic;
 
-        private TransientTopicHandle topic = null;
+        private TransientTopicHandle topic;
 
-        private TransientTopicWorker(String topicName, String clientId) {
+        private TransientTopicWorker(String topicName, String clientId, PreparedTopic preparedTopic) {
             this.topicName = topicName;
             this.clientId = clientId;
+            this.preparedTopic = preparedTopic;
+            this.topic = preparedTopic == null ? null : preparedTopic.handle();
         }
 
         @Override
@@ -415,24 +477,28 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
 
             log.info("Topic worker started. topic={}, activeWorkers={}", topicName, activeWorkers.get());
 
-            long topicCreateRequestMs = TimeUtils.getCurrentTimeMillis();
+            long topicCreateRequestMs = preparedTopic == null
+                    ? TimeUtils.getCurrentTimeMillis() : preparedTopic.requestMs();
             try {
                 if (!running.get() || System.nanoTime() >= deadlineNanos) {
                     return;
                 }
 
-                try {
-                    topic = await(producer.create(topicName), 60_000);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    log.error("Topic creation interrupted. topic={}", topicName, e);
-                    return;
-                } catch (Exception e) {
-                    log.error("Failed to create topic. topic={}", topicName, e);
-                    return;
+                if (preparedTopic == null) {
+                    try {
+                        topic = await(producer.create(topicName), 60_000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        log.error("Topic creation interrupted. topic={}", topicName, e);
+                        return;
+                    } catch (Exception e) {
+                        log.error("Failed to create topic. topic={}", topicName, e);
+                        return;
+                    }
+                    metrics.addTopicCreateLatency(TimeUtils.getCurrentTimeMillis() - topicCreateRequestMs);
+                } else {
+                    metrics.addTopicCreateLatency(preparedTopic.latencyMs());
                 }
-                long responseMs = TimeUtils.getCurrentTimeMillis();
-                metrics.addTopicCreateLatency(responseMs - topicCreateRequestMs);
 
                 while (running.get() && System.nanoTime() < deadlineNanos) {
                     sleepUntil(nextProduceNanos);
@@ -594,6 +660,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     }
 
     private void cleanupLogWriter() {
+        if (newMonitorLogWriter == null) return;
         newMonitorLogWriter.gracefulShutdown();
         newMonitorLogWriter.syncedNotify();
         try {
