@@ -7,6 +7,7 @@ import java.io.PrintWriter;
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -503,8 +504,6 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         @Override
         public void run() {
             long workerEntered = timingDiagnostics ? System.nanoTime() : 0;
-            // 차량별 패딩을 생산 시작 전에 한 번 준비한다. 워커 사이에 가변 생성기를 공유하지 않는다.
-            final VehicleMessageGenerator messageGenerator = new VehicleMessageGenerator(msgSize);
             activeWorkers.incrementAndGet();
             long producerInitStart = timingDiagnostics ? System.nanoTime() : 0;
             KafkaTransientProducer<String, String> producer = shareProducer
@@ -559,15 +558,16 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                         break;
                     }
 
-                    String messageId = topicName + "_" + sentCnt;
-                    String message = messageGenerator.generate(messageId);
-                    TransientProducerRecord<String, String> record = new TransientProducerRecord<>(topic, message);
                     long requestMs = TimeUtils.getCurrentTimeMillis();
+                    String messageId = topicName + "_" + sentCnt;
+                    String message = messageAdaptor.generate(messageId, requestMs);
+                    TransientProducerRecord<String, String> record = new TransientProducerRecord<>(topic, message);
 
                     long enteredSend = System.nanoTime();
                     ProducerTimingProbe.Sample sample = probe == null ? null : probe.begin(
                             sentCnt, enteredSend - startedNanos, nextProduceNanos, enteredSend);
                     TransientTopicProducerCallback callback = new TransientTopicProducerCallback(
+                        message,
                         requestMs,
                         topicCreateRequestMs,
                         metrics,
@@ -648,6 +648,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     }
 
     private class TransientTopicProducerCallback implements TransientCallback {
+        private final String message;
         private final long requestMs;
         private final long topicCreateRequestMs;
         private final TopicMetrics metrics;
@@ -658,6 +659,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         private ProducerTimingProbe.Sample timingSample;
 
         private TransientTopicProducerCallback(
+                String message,
                 long requestMs,
                 long topicCreateRequestMs,
                 TopicMetrics metrics,
@@ -666,6 +668,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                 long requestNanos,
                 boolean needFullRecord
         ) {
+            this.message = message;
             this.requestMs = requestMs;
             this.topicCreateRequestMs = topicCreateRequestMs;
             this.metrics = metrics;
@@ -679,7 +682,6 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         public void onCompletion(TransientRecordMetadata metadata, Exception exception) {
             // 기존 latency에 진단 집계 소요시간을 섞지 않도록 응답 시각부터 확보한다.
             long responseMs = TimeUtils.getCurrentTimeMillis();
-            String monitorLog = messageAdaptor.generate(topicName + "_" + messageIndex, requestMs);
             if (timingSample != null) timingSample.completed(System.nanoTime(), exception != null);
             // 실패는 ignoreResponse 여부와 무관하게 집계한다. 성공 통계/전송 방식은 그대로 유지한다.
             if (exception != null) {
@@ -690,7 +692,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                     String detail = String.valueOf(exception.getMessage()).replace('\n', ' ').replace('\r', ' ');
                     if (detail.length() > 512) detail = detail.substring(0, 512);
                     log.error("Callback failure: kst={}, topic={}, messageIndex={}, creationRecord={}, elapsedMs={}, deliveryTimeoutMs={}, requestTimeoutMs={}, maxBlockMs={}, vehicleLifetimeMs={}, exception={}, detail={}",
-                            java.time.OffsetDateTime.now(java.time.ZoneOffset.ofHours(9)), metrics.topicName,
+                            OffsetDateTime.now(java.time.ZoneOffset.ofHours(9)), metrics.topicName,
                             messageIndex, messageIndex == 0,
                             TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - requestNanos),
                             callbackConfig.getInt(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG),
@@ -705,8 +707,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
             }
             metrics.addProduceLatency(responseMs - requestMs);
             if (needFullRecrod) {
-                newMonitoringQueue.enqueue(
-                    new JsonBasedLatencyMonitorLog(messageAdaptor, monitorLog, "SUCCESS", responseMs));
+                newMonitoringQueue.enqueue(new JsonBasedLatencyMonitorLog(messageAdaptor, message, "SUCCESS", responseMs));
                 newMonitorLogWriter.notifyIfNeeded();
             }
         }
