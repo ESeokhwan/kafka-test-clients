@@ -64,6 +64,9 @@ bash() {
     elif [[ "$file" == *prepare_ssd_fio.sh ]]; then
         echo fio >> "$TRACE"
         [[ "${FAIL_FIO:-false}" != true ]] || return 9
+    elif [[ "${1:-}" == apps && "${2:-}" == BrokerExtension ]]; then
+        echo 'MOCK_ROLLOUT_COMPLETE'
+        return 0
     else
         if [[ " $* " == *' --check-topics-absent '* ]]; then
             [[ "${FAIL_TOPIC_CHECK:-false}" != true ]] || return 23

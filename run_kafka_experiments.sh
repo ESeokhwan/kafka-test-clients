@@ -56,6 +56,8 @@ usage() {
       "      --inactivity-check-interval-ms --inactivity-threshold-ms --deletion-mode" \
       "      --delete-start-timeout-seconds --delete-topic-prefix" \
       "정리: --cleanup-topic-prefix --cleanup-timeout-seconds" \
+      "Monitoring: 매 회차 종료 시 브로커별 rollout (실패는 .run.txt에 기록하고 계속 진행)" \
+      "            --monitor-rollout-timeout-ms 30000 --monitor-rollout-command-config FILE" \
       "공통: --output-dir --inter-experiment-delay-seconds --kafka-home --daemon-source --client-dir --runner" \
       "단계 간격: --step-delay-seconds 10 (기본 10초, 0이면 비활성; 생략한 단계는 대기하지 않음)" \
       "캐시: --drop-caches / --no-drop-caches (실험 기본 ON, 실험 전후 sync 후 Linux drop_caches=3; 단독 모드 제외)" \
@@ -98,7 +100,7 @@ while [[ $# -gt 0 ]]; do
             [[ "$1" != *=* ]] || fail "$option 은 값을 받지 않는 플래그입니다."
             if [[ "$option" == --fstrim ]]; then FSTRIM_ENABLED=true; else FSTRIM_ENABLED=false; fi
             shift; continue ;;
-        --fstrim-target-dir|--fstrim-wait-seconds|--broker-ssh|--broker-project-dir|--remote-identity-file|--remote-stage-timeout-seconds) ;;
+        --fstrim-target-dir|--fstrim-wait-seconds|--broker-ssh|--broker-project-dir|--remote-identity-file|--remote-stage-timeout-seconds|--monitor-rollout-timeout-ms|--monitor-rollout-command-config) ;;
         --ignore-response|--need-flush|--share-producer)
             [[ "$1" != *=* ]] || fail "$option 은 값을 받지 않는 플래그입니다."
             extra_args+=("$1"); shift; continue ;;
@@ -144,6 +146,9 @@ if [[ ! -f "$CLIENT_DIR/scripts/kafka_clients_run.sh" ]]; then
 fi
 RUNNER="${RUNNER:-$CLIENT_DIR/scripts/kafka_clients_run.sh}"
 BROKERS="${BROKERS:-166.104.110.11:9092}"
+MONITOR_ROLLOUT_TIMEOUT_MS="${MONITOR_ROLLOUT_TIMEOUT_MS:-30000}"
+MONITOR_ROLLOUT_COMMAND_CONFIG="${MONITOR_ROLLOUT_COMMAND_CONFIG:-}"
+[[ "$MONITOR_ROLLOUT_TIMEOUT_MS" =~ ^[1-9][0-9]{0,9}$ ]] && (( MONITOR_ROLLOUT_TIMEOUT_MS <= 2147483647 )) || fail "--monitor-rollout-timeout-ms는 1~2147483647의 정수입니다."
 PREFIX="${PREFIX:-test_creator}"
 # 삭제 판정은 비활성 시간으로 하며 접두어는 관리 대상 범위만 제한한다.
 DELETE_TOPIC_PREFIX="${DELETE_TOPIC_PREFIX:-${PREFIX}_}"
@@ -373,6 +378,7 @@ start_record() {
         fi
         printf 'STEP_DELAY_SECONDS=%s\nDROP_CACHES=%s\n' "$STEP_DELAY_SECONDS" "$DROP_CACHES"
         printf 'BUILD_ENABLED=%s\n' "$BUILD_ENABLED"
+        printf 'MONITOR_ROLLOUT_TIMEOUT_MS=%s\nMONITOR_ROLLOUT_COMMAND_CONFIG=%q\n' "$MONITOR_ROLLOUT_TIMEOUT_MS" "$MONITOR_ROLLOUT_COMMAND_CONFIG"
         printf 'FSTRIM_ENABLED=%s\nFSTRIM_TARGET_DIR=%q\nFSTRIM_WAIT_SECONDS=%s\n' "$FSTRIM_ENABLED" "$FSTRIM_TARGET_DIR" "$FSTRIM_WAIT_SECONDS"
         printf 'BROKER_SSH=%q\nBROKER_PROJECT_DIR=%q\nREMOTE_STAGE_TIMEOUT_SECONDS=%s\n' "$BROKER_SSH" "$BROKER_PROJECT_DIR" "$REMOTE_STAGE_TIMEOUT_SECONDS"
         printf 'CLIENT_EXECUTION_HOST=%q\nRESOURCE_EXECUTION_HOST=%q\n' "$(hostname)" "${BROKER_SSH:-$(hostname)}"
@@ -515,9 +521,46 @@ on_exit() {
 }
 complete_exit() {
     local result="$1"
+    # 정상 종료·복구 실패·중단 모두 원래 종료 코드를 보존하고, 파일명 확정 전에 한 번만 시도한다.
+    if [[ "${round_started:-false}" == true ]]; then
+        rollout_monitor_logs || true
+    fi
     finalize_round "$result" || result=1
     finish_console
     exit "$result"
+}
+rollout_monitor_logs() {
+    # finish_record()가 정상 종료 시 record_file을 비우므로 회차의 기록 경로를 다시 연결한다.
+    local record_file="${record_file:-$OUTPUT_DIR/${tag}.run.txt}" broker rollout_status
+    local -a rollout_brokers rollout_command
+    [[ -f "$record_file" ]] || return 0
+    IFS=',' read -r -a rollout_brokers <<< "$BROKERS"
+    for broker in "${rollout_brokers[@]}"; do
+        broker="${broker#"${broker%%[![:space:]]*}"}"
+        broker="${broker%"${broker##*[![:space:]]}"}"
+        rollout_command=(bash "$RUNNER" apps BrokerExtension --broker "$broker"
+            --target monitor-log-rollout --operation flush-and-rollout --timeout-ms "$MONITOR_ROLLOUT_TIMEOUT_MS")
+        if [[ -n "$MONITOR_ROLLOUT_COMMAND_CONFIG" ]]; then
+            rollout_command+=(--command-config "$MONITOR_ROLLOUT_COMMAND_CONFIG")
+        fi
+        describe_step "[Monitoring rollout] 실험 종료: broker=$broker, 제한=${MONITOR_ROLLOUT_TIMEOUT_MS}ms"
+        record_command MONITOR_ROLLOUT_COMMAND "${rollout_command[@]}"
+        record_event "stage=MONITOR_ROLLOUT_START broker=$broker"
+        # 앱의 출력과 오류를 해당 회차에 직접 보존한다. 실패해도 ERR/복구 경로로 보내지 않는다.
+        if "${rollout_command[@]}" >> "$record_file" 2>&1; then
+            rollout_status=0
+        else
+            rollout_status=$?
+        fi
+        if [[ "$rollout_status" == 0 ]]; then
+            record_event "stage=MONITOR_ROLLOUT_SUCCESS broker=$broker exit_code=0"
+            describe_step "[Monitoring rollout] 완료: broker=$broker"
+        else
+            record_event "stage=MONITOR_ROLLOUT_FAILED broker=$broker exit_code=$rollout_status continue=true"
+            describe_step "[Monitoring rollout] 실패: broker=$broker, 종료 코드=$rollout_status. 기록을 남기고 기존 흐름을 계속합니다."
+        fi
+    done
+    return 0
 }
 finalize_round() {
     [[ "${round_started:-false}" == true ]] || return 0
