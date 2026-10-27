@@ -75,6 +75,16 @@ elif program == "java":
 elif program == "runner":
     assert args[0] == "apps"
     producer_class = args[1]
+    if producer_class == "BrokerExtension":
+        broker = args[args.index("--broker") + 1]
+        record("rollout", broker=broker)
+        print("MOCK_ROLLOUT_OUTPUT broker=" + broker)
+        status = int(os.environ.get("MOCK_ROLLOUT_STATUS", "0"))
+        if os.environ.get("MOCK_ROLLOUT_FAIL_BROKER") == broker:
+            status = 7
+        if status:
+            print("MOCK_ROLLOUT_ERROR exit_code=" + str(status), file=sys.stderr)
+        sys.exit(status)
     if producer_class == "ResetTransientTopics":
         args = args[2:]
         reset(producer_class)
@@ -88,6 +98,16 @@ elif program == "runner":
         record("precreate", producer_class=producer_class)
     else:
         record("producer", producer_class=producer_class)
+        if os.environ.get("MOCK_WAIT_IOSTAT"):
+            deadline = time.monotonic() + 5
+            while '"kind": "iostat"' not in trace.read_text():
+                if time.monotonic() >= deadline:
+                    raise AssertionError("iostat did not start")
+                time.sleep(.01)
+        if os.environ.get("MOCK_INTERRUPT_PRODUCER"):
+            import signal
+            os.kill(os.getppid(), signal.SIGTERM)
+            time.sleep(5)
         marker = trace.with_suffix(".producer-failed")
         if os.environ.get("MOCK_FAIL_PRODUCER_ONCE") and not marker.exists():
             marker.touch()
@@ -168,6 +188,7 @@ class TransientOrchestrationTests(unittest.TestCase):
             "TOPIC_MODE", "CLEANUP_ENABLED", "DELETE_ENABLED", "TRANSIENT_RESET_SCRIPT",
             "BROKER_SSH", "BROKER_PROJECT_DIR", "BUILD_ENABLED", "RETRY", "PREFIX",
             "CLEANUP_TOPIC_PREFIX", "DELETE_TOPIC_PREFIX", "EXPERIMENT_CLASS_DIR",
+            "MONITOR_ROLLOUT_TIMEOUT_MS", "MONITOR_ROLLOUT_COMMAND_CONFIG",
         ):
             self.env.pop(name, None)
         self.env.update(
@@ -190,10 +211,10 @@ class TransientOrchestrationTests(unittest.TestCase):
             for entry in entries:
                 jar.writestr(entry, b"mock")
 
-    def run_case(self, *args, env=None):
+    def run_case(self, *args, env=None, selection=("--hz", "2")):
         command = [
             BASH, str(self.project / "run_kafka_experiments.sh"),
-            "--hz", "2", "--no-build", "--no-fio", "--no-fstrim",
+            *selection, "--no-build", "--no-fio", "--no-fstrim",
             "--no-drop-caches", "--no-iostat", "--step-delay-seconds", "0",
             "--inter-experiment-delay-seconds", "0", "--topic-cnt", "2",
             "--run-duration-minutes", "0.01", "--output-dir", str(self.output),
@@ -226,7 +247,7 @@ class TransientOrchestrationTests(unittest.TestCase):
             self.assertEqual(producer["args"][producer["args"].index("--topic-prepare-timeout-seconds") + 1], "300")
         else:
             self.assertNotIn("--precreate", producer["args"])
-        self.assertEqual([call["kind"] for call in self.calls()], ["producer"])
+        self.assertEqual([call["kind"] for call in self.calls()], ["producer", "rollout"])
         metadata = self.metadata()
         for expected in (f"TOPIC_MODE={self.topic_mode}", "CLEANUP_POLICY=none",
                          "PRODUCER_CLASS=AutoTransientTopicProducerMetrics",
@@ -241,7 +262,7 @@ class TransientOrchestrationTests(unittest.TestCase):
     def test_auto_keeps_existing_check_producer_and_bounded_cleanup(self):
         self.assert_success(self.run_case("--topic-mode", "auto", "--start-index", "10"))
         self.assertEqual([call["kind"] for call in self.calls()],
-                         ["javac", "check", "producer", "cleanup"])
+                         ["javac", "check", "producer", "cleanup", "rollout"])
         producer, = self.calls("producer")
         self.assertEqual(producer["producer_class"], "AutoTopicProducerMetrics")
         cleanup, = self.calls("cleanup")
@@ -251,14 +272,14 @@ class TransientOrchestrationTests(unittest.TestCase):
     def test_precreate_keeps_existing_order_and_producer_flags(self):
         self.assert_success(self.run_case("--topic-mode", "precreate", "--fio"))
         self.assertEqual([call["kind"] for call in self.calls()],
-                         ["javac", "cleanup", "check", "precreate", "fio", "producer", "cleanup"])
+                         ["javac", "cleanup", "check", "precreate", "fio", "producer", "cleanup", "rollout"])
         self.assertIn("--require-existing-topics", self.calls("producer")[0]["args"])
 
     def test_default_cleanup_uses_reset_app_without_external_script(self):
         result = self.run_case("--topic-mode", self.topic_mode, "--build", "--fio")
         self.assert_success(result)
         self.assertEqual([call["kind"] for call in self.calls()],
-                         ["build", "fio", "producer", "reset"])
+                         ["build", "fio", "producer", "reset", "rollout"])
         reset, = self.calls("reset")
         self.assertEqual(reset["reset_class"], "ResetTransientTopics")
         self.assertEqual(reset["args"],
@@ -295,7 +316,7 @@ class TransientOrchestrationTests(unittest.TestCase):
             "--transient-reset-script", str(self.reset_script),
             "--cleanup-timeout-seconds", "7"))
         self.assertEqual([call["kind"] for call in self.calls()],
-                         ["cache", "fio", "producer", "reset", "cache"] * 2)
+                         ["cache", "fio", "producer", "reset", "cache", "rollout", "rollout"] * 2)
         for reset in self.calls("reset"):
             self.assertEqual(reset["args"], [
                 "--bootstrap-server", "broker-a:9092,broker-b:9092", "--timeout-ms", "7000"])
@@ -309,7 +330,7 @@ class TransientOrchestrationTests(unittest.TestCase):
             "--topic-mode", self.topic_mode, "--retry", "2",
             env={"MOCK_RESET_STATUS": "8"})
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual([call["kind"] for call in self.calls()], ["producer", "reset"])
+        self.assertEqual([call["kind"] for call in self.calls()], ["producer", "reset", "rollout"])
         self.assertNotIn("status=FAILED_CLEANED", self.metadata())
         self.assertNotIn("stage=TRANSIENT_RESET_SUCCESS", self.metadata())
         self.assertIn("next_experiment_allowed=false", self.metadata())
@@ -331,7 +352,7 @@ class TransientOrchestrationTests(unittest.TestCase):
             "--topic-mode", self.topic_mode, "--retry", "2",
             env={"MOCK_FAIL_PRODUCER_ONCE": "1", "MOCK_RESET_STATUS": "9"})
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual([call["kind"] for call in self.calls()], ["producer", "reset"])
+        self.assertEqual([call["kind"] for call in self.calls()], ["producer", "reset", "rollout"])
         self.assertIn("status=RECOVERY_FAILED", self.metadata())
         self.assertNotIn("status=FAILED_CLEANED", self.metadata())
 
@@ -341,7 +362,7 @@ class TransientOrchestrationTests(unittest.TestCase):
             env={"MOCK_FAIL_PRODUCER_ONCE": "1"})
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual([call["kind"] for call in self.calls()],
-                         ["producer", "reset", "producer", "reset"])
+                         ["producer", "reset", "rollout", "producer", "reset", "rollout"])
         self.assertIn("status=FAILED_CLEANED", self.metadata())
         self.assertIn("status=SUCCESS", self.metadata())
 
@@ -351,7 +372,7 @@ class TransientOrchestrationTests(unittest.TestCase):
             "--transient-reset-script", str(self.reset_script),
             env={"MOCK_FAIL_PRODUCER_ONCE": "1"})
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual([call["kind"] for call in self.calls()], ["producer"])
+        self.assertEqual([call["kind"] for call in self.calls()], ["producer", "rollout"])
         self.assertNotIn("status=FAILED_CLEANED", self.metadata())
         self.assertIn("status=RECOVERY_SKIPPED", self.metadata())
 
@@ -360,7 +381,7 @@ class TransientOrchestrationTests(unittest.TestCase):
             "--topic-mode", self.topic_mode, "--fio", "--retry", "2",
             env={"MOCK_FAIL_FIO": "1"})
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual([call["kind"] for call in self.calls()], ["fio"])
+        self.assertEqual([call["kind"] for call in self.calls()], ["fio", "rollout"])
         self.assertIn("status=PREFLIGHT_FAILED", self.metadata())
 
     def test_stale_or_invalid_jar_is_rejected_before_fio(self):
@@ -381,7 +402,7 @@ class TransientOrchestrationTests(unittest.TestCase):
             "--topic-mode", self.topic_mode, "--no-cleanup", "--fio",
             "--broker-ssh", "test@mock-broker", "--broker-project-dir", "/mock"))
         self.assertEqual([call["kind"] for call in self.calls()],
-                         ["remote_check", "remote_fio", "producer"])
+                         ["remote_check", "remote_fio", "producer", "rollout"])
         self.assertEqual(self.calls("producer")[0]["producer_class"],
                          "AutoTransientTopicProducerMetrics")
 
@@ -390,7 +411,7 @@ class TransientOrchestrationTests(unittest.TestCase):
             "--topic-mode", self.topic_mode, "--fio",
             "--broker-ssh", "test@mock-broker", "--broker-project-dir", "/mock"))
         self.assertEqual([call["kind"] for call in self.calls()],
-                         ["remote_check", "remote_fio", "producer", "reset"])
+                         ["remote_check", "remote_fio", "producer", "reset", "rollout"])
         self.assertEqual(self.calls("reset")[0]["reset_class"], "ResetTransientTopics")
 
     def test_builtin_cleanup_rejects_jar_missing_reset_app_or_api(self):
@@ -429,8 +450,8 @@ class TransientOrchestrationTests(unittest.TestCase):
         # Keep the mock experiment alive for one collection interval before stopping iostat.
         self.assert_success(self.run_case(
             "--topic-mode", self.topic_mode, "--no-cleanup", "--iostat",
-            "--inter-experiment-delay-seconds", "1"))
-        self.assertCountEqual([call["kind"] for call in self.calls()], ["iostat", "producer"])
+            "--inter-experiment-delay-seconds", "1", env={"MOCK_WAIT_IOSTAT": "1"}))
+        self.assertCountEqual([call["kind"] for call in self.calls()], ["iostat", "producer", "rollout"])
         log, = self.output.glob("*_iostat.log")
         self.assertIn("MOCK_IOSTAT", log.read_text())
         self.assertIn("IOSTAT_ENABLED=true", self.metadata())
@@ -447,10 +468,88 @@ class TransientOrchestrationTests(unittest.TestCase):
                                env={"MOCK_FAIL_PRODUCER_ONCE": "1"})
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual([call["kind"] for call in self.calls()],
-                         ["javac", "check", "producer", "cleanup",
-                          "check", "producer", "cleanup"])
+                         ["javac", "check", "producer", "cleanup", "rollout",
+                          "check", "producer", "cleanup", "rollout"])
         self.assertIn("status=FAILED_CLEANED", self.metadata())
         self.assertIn("status=SUCCESS", self.metadata())
+
+    def test_rollout_runs_once_for_every_hz_and_repeat_including_the_last(self):
+        self.assert_success(self.run_case("--topic-mode", self.topic_mode, "--retry", "2", selection=("--all",)))
+        self.assertEqual([call["kind"] for call in self.calls()], ["producer", "reset", "rollout"] * 10)
+        records = list(self.output.rglob("*.run.txt"))
+        self.assertEqual(len(records), 10)
+        for record in records:
+            text = record.read_text()
+            self.assertEqual(text.count("stage=MONITOR_ROLLOUT_SUCCESS"), 1)
+            self.assertIn("MOCK_ROLLOUT_OUTPUT broker=166.104.110.11:9092", text)
+            self.assertIn("FINAL_EXIT_CODE=0", text)
+            self.assertLess(text.index("stage=COOLDOWN_END"), text.index("stage=MONITOR_ROLLOUT_START"))
+            self.assertLess(text.index("stage=MONITOR_ROLLOUT_SUCCESS"), text.index("FINAL_EXIT_CODE=0"))
+            self.assertNotIn("_end_PENDING", record.name)
+
+    def test_rollout_failure_does_not_stop_other_brokers_or_repeated_experiments(self):
+        config = self.work / "monitor security.properties"
+        config.write_text("security.protocol=SASL_SSL\n")
+        self.assert_success(self.run_case(
+            "--topic-mode", self.topic_mode, "--retry", "2", "--output-layout", "nested",
+            "--brokers", " broker-a:9092 , [::1]:9092 ", "--monitor-rollout-timeout-ms", "1500",
+            "--monitor-rollout-command-config", str(config),
+            env={"MOCK_ROLLOUT_FAIL_BROKER": "broker-a:9092"}))
+        rollouts = self.calls("rollout")
+        self.assertEqual([call["broker"] for call in rollouts], ["broker-a:9092", "[::1]:9092"] * 2)
+        for call in rollouts:
+            self.assertEqual(call["args"], ["apps", "BrokerExtension", "--broker", call["broker"],
+                             "--target", "monitor-log-rollout", "--operation", "flush-and-rollout",
+                             "--timeout-ms", "1500", "--command-config", str(config)])
+        records = list(self.output.rglob("*.run.txt"))
+        self.assertEqual(len(records), 2)
+        for record in records:
+            text = record.read_text()
+            self.assertIn("stage=MONITOR_ROLLOUT_FAILED broker=broker-a:9092 exit_code=7 continue=true", text)
+            self.assertIn("MOCK_ROLLOUT_ERROR exit_code=7", text)
+            self.assertIn("stage=MONITOR_ROLLOUT_SUCCESS broker=[::1]:9092 exit_code=0", text)
+            self.assertIn("FINAL_EXIT_CODE=0", text)
+        self.assertFalse(list(self.output.rglob("*_failure.log")))
+
+    def test_rollout_timeout_exit_code_is_logged_without_retry_or_failed_experiment(self):
+        self.assert_success(self.run_case(
+            "--topic-mode", self.topic_mode, "--retry", "2", "--no-cleanup",
+            env={"MOCK_ROLLOUT_STATUS": "124"}))
+        self.assertEqual([call["kind"] for call in self.calls()], ["producer", "rollout"] * 2)
+        self.assertEqual(self.metadata().count("exit_code=124 continue=true"), 2)
+        self.assertNotIn("status=FAILED_CLEANED", self.metadata())
+
+    def test_rollout_failure_preserves_failed_experiment_recovery_and_exit_status(self):
+        result = self.run_case("--topic-mode", self.topic_mode, "--retry", "2",
+                               env={"MOCK_FAIL_PRODUCER_ONCE": "1", "MOCK_ROLLOUT_STATUS": "1"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual([call["kind"] for call in self.calls()], ["producer", "reset", "rollout"] * 2)
+        failed, = self.output.rglob("*repeat1*.run.txt")
+        succeeded, = self.output.rglob("*repeat2*.run.txt")
+        self.assertIn("FINAL_EXIT_CODE=20", failed.read_text())
+        self.assertIn("FINAL_EXIT_CODE=0", succeeded.read_text())
+        self.assertIn("status=FAILED_CLEANED next_experiment_allowed=true", failed.read_text())
+        self.assertEqual(self.metadata().count("stage=MONITOR_ROLLOUT_FAILED"), 2)
+
+    def test_standalone_cleanup_does_not_rollout(self):
+        self.assert_success(self.run_case("--cleanup-topic-prefix", "test_scope_", selection=("--mode", "cleanup")))
+        self.assertEqual([call["kind"] for call in self.calls()], ["javac", "cleanup"])
+        self.assertNotIn("stage=MONITOR_ROLLOUT", self.metadata())
+
+    def test_interruption_keeps_original_status_even_if_rollout_fails(self):
+        result = self.run_case("--topic-mode", self.topic_mode, "--retry", "2",
+                               env={"MOCK_INTERRUPT_PRODUCER": "1", "MOCK_ROLLOUT_STATUS": "1"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([call["kind"] for call in self.calls()], ["producer", "rollout"])
+        self.assertIn("FINAL_EXIT_CODE=143", self.metadata())
+        self.assertIn("stage=MONITOR_ROLLOUT_FAILED", self.metadata())
+
+    def test_invalid_rollout_timeout_is_rejected_before_work(self):
+        for value in ("0", "-1", "abc", "2147483648"):
+            with self.subTest(value=value):
+                result = self.run_case("--monitor-rollout-timeout-ms", value)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.calls(), [])
 
     def test_missing_reset_script_and_invalid_timeout_are_rejected_early(self):
         for extra in [
@@ -473,7 +572,7 @@ class TransientPrecreateOrchestrationTests(TransientOrchestrationTests):
     def test_precreate_timeout_and_full_output_are_configured_and_recorded(self):
         self.assert_success(self.run_case(
             "--topic-mode", self.topic_mode, "--topic-prepare-timeout-seconds", "17"))
-        self.assertEqual([call["kind"] for call in self.calls()], ["producer", "reset"])
+        self.assertEqual([call["kind"] for call in self.calls()], ["producer", "reset", "rollout"])
         args = self.calls("producer")[0]["args"]
         self.assertEqual(args.count("--precreate"), 1)
         self.assertEqual(args[args.index("--topic-prepare-timeout-seconds") + 1], "17")
