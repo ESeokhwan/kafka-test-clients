@@ -559,7 +559,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                     }
 
                     long requestMs = TimeUtils.getCurrentTimeMillis();
-                    String messageId = topicName + "_" + sentCnt;
+                    String messageId = (needFullRecord ? "R" : "") + topicName + "_" + sentCnt;
                     String message = messageAdaptor.generate(messageId, requestMs);
                     TransientProducerRecord<String, String> record = new TransientProducerRecord<>(topic, message);
 
