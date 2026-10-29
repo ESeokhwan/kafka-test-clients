@@ -30,9 +30,9 @@ import moniq.writer.strategy.CsvMonitorLogWriteStrategy;
 import org.apache.kafka.clients.producer.KafkaTransientProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.TransientCallback;
-import org.apache.kafka.clients.producer.TransientProducerRecord;
 import org.apache.kafka.clients.producer.TransientRecordMetadata;
 import org.apache.kafka.clients.producer.TransientTopicHandle;
+import org.apache.kafka.common.Uuid;
 import org.apache.logging.log4j.ThreadContext;
 import org.example.core.AbstractCommand;
 import org.example.core.producer.ProducerService;
@@ -94,6 +94,9 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     @Option(names = {"--need-flush"}, description = "If true, flush after each send. Default: false")
     private boolean needFlush = false;
 
+    @Option(names = {"--need-manual-seal"}, description = "If true, manually seal transient topic right after each workers is done. It does not work on precreate mode. Default: false")
+    private boolean needManualSeal = false;
+
     // 진단은 기본 OFF이며, 기존 metrics CSV와 별도의 *_timing.csv에 저장한다.
     @Option(names = "--timing-diagnostics")
     private boolean timingDiagnostics;
@@ -144,6 +147,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     private final List<Thread> workerThreads = Collections.synchronizedList(new ArrayList<>());
     private final List<TopicMetricsResult> topicResults = Collections.synchronizedList(new ArrayList<>());
     private KafkaTransientProducer<String, String> sharedProducer;
+    private final List<PreparedTopic> targetTopics = new ArrayList<>();
     // 유효 기본값을 포함한 진단용 설정. 전송 옵션 자체는 변경하지 않는다.
     private ProducerConfig callbackConfig;
 
@@ -202,7 +206,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         );
 
         try {
-            List<PreparedTopic> preparedTopics = precreate ? precreateTopics() : List.of();
+            if (precreate) precreateTopics();
             startBarrier(startBarrierDelay);
             if (timingDiagnostics) {
                 String path = normalizeCsvPath(metricsFile).replaceFirst("\\.csv$", "_timing.csv");
@@ -216,10 +220,10 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                 }
             }
             timingEpochNanos = System.nanoTime();
-            launchTopicWorkers(preparedTopics);
+            launchTopicWorkers();
             joinWorkers();
-            if (precreate && running.get()) {
-                sealPreparedTopics(preparedTopics);
+            if (running.get()) {
+                sealTopics();
             }
         } finally {
             try {
@@ -288,14 +292,14 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         }
     }
 
-    private List<PreparedTopic> precreateTopics() {
+    private void precreateTopics() {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(topicPrepareTimeoutSeconds);
         log.info("Transient topic precreation starting. count={}, timeoutSeconds={}",
                 effectiveTopicCnt(), topicPrepareTimeoutSeconds);
         KafkaTransientProducer<String, String> producer = new KafkaTransientProducer<>(
                 createProducerConfig(prefix + "_precreate"));
         try {
-            return precreateTopics(producer::create, deadline);
+            targetTopics.addAll(precreateTopics(producer::create, deadline));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Transient topic precreation interrupted; production has not started", e);
@@ -333,21 +337,20 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
 
     record PreparedTopic(TransientTopicHandle handle, long requestMs, long latencyMs) {}
 
-    private void sealPreparedTopics(List<PreparedTopic> topics) {
-        log.info("All produce workers finished. Sealing precreated transient topics. count={}", topics.size());
+    private void sealTopics() {
+        log.info("All produce workers finished. Sealing transient topics. count={}", targetTopics.size());
         try (KafkaTransientProducer<String, String> producer = new KafkaTransientProducer<>(
                 createProducerConfig(prefix + "_seal"))) {
-            sealPreparedTopics(topics, producer::seal,
+            sealTopics(targetTopics, producer::seal,
                     callbackConfig.getInt(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Transient topic sealing interrupted", e);
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to seal precreated transient topics", e);
+        } catch (Exception ignored) {
         }
     }
 
-    void sealPreparedTopics(List<PreparedTopic> topics,
+    void sealTopics(List<PreparedTopic> topics,
             Function<TransientTopicHandle, Future<?>> seal, long timeoutMs) throws Exception {
         for (int i = 0; i < topics.size(); i++) {
             if (!running.get() || Thread.currentThread().isInterrupted()) {
@@ -360,7 +363,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         }
     }
 
-    private void launchTopicWorkers(List<PreparedTopic> preparedTopics) {
+    private void launchTopicWorkers() {
         long topicCreateIntervalNanos = hzToIntervalNanos(topicCreateHz);
         long nextLaunchNanos = System.nanoTime();
         int targetTopicCnt = effectiveTopicCnt();
@@ -373,7 +376,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                     new TransientTopicWorker(
                             topicName,
                             topicName,
-                            precreate ? preparedTopics.get(i) : null,
+                            precreate ? targetTopics.get(i) : null,
                             needFullRecord(targetTopicCnt, 5, i)
                     ),
                     "AutoTopicProducerMetrics-" + topicName
@@ -491,13 +494,13 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         private final PreparedTopic preparedTopic;
         private final boolean needFullRecord;
 
-        private TransientTopicHandle topic;
+        private volatile Uuid topicId;
 
         private TransientTopicWorker(String topicName, String clientId, PreparedTopic preparedTopic, boolean needFullRecord) {
             this.topicName = topicName;
             this.clientId = clientId;
             this.preparedTopic = preparedTopic;
-            this.topic = preparedTopic == null ? null : preparedTopic.handle();
+            this.topicId = preparedTopic == null ? null : preparedTopic.handle().id();
             this.needFullRecord = needFullRecord;
         }
 
@@ -536,22 +539,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                     return;
                 }
 
-                if (preparedTopic == null) {
-                    try {
-                        topic = await(producer.create(topicName), 60_000);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        log.error("Topic creation interrupted. topic={}", topicName, e);
-                        return;
-                    } catch (Exception e) {
-                        log.error("Failed to create topic. topic={}", topicName, e);
-                        return;
-                    }
-                    metrics.addTopicCreateLatency(TimeUtils.getCurrentTimeMillis() - topicCreateRequestMs);
-                } else {
-                    metrics.addTopicCreateLatency(preparedTopic.latencyMs());
-                }
-
+                if (preparedTopic != null) metrics.addTopicCreateLatency(preparedTopic.latencyMs());
                 while (running.get() && System.nanoTime() < deadlineNanos) {
                     sleepUntil(nextProduceNanos);
                     if (!running.get() || System.nanoTime() >= deadlineNanos) {
@@ -561,7 +549,6 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                     long requestMs = TimeUtils.getCurrentTimeMillis();
                     String messageId = (needFullRecord ? "R" : "") + topicName + "_" + sentCnt;
                     String message = messageAdaptor.generate(messageId, requestMs);
-                    TransientProducerRecord<String, String> record = new TransientProducerRecord<>(topic, message);
 
                     long enteredSend = System.nanoTime();
                     ProducerTimingProbe.Sample sample = probe == null ? null : probe.begin(
@@ -571,14 +558,12 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                         requestMs,
                         topicCreateRequestMs,
                         metrics,
-                        topicName,
                         sentCnt,
-                        enteredSend,
-                        needFullRecord
+                        enteredSend
                     );
                     callback.timingSample = sample;
                     try {
-                        producer.send(record, callback);
+                        producer.send(topicName, null, message, callback);
                     } catch (RuntimeException e) {
                         if (sample != null) sample.completed(System.nanoTime(), true);
                         throw e;
@@ -599,13 +584,11 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
             } finally {
                 try {
                     try {
-                        if (topic != null) {
+                        producer.flush();
+                        // 사전 생성 모드는 모든 워커의 생산/flush 완료 후 메인 스레드에서 seal한다.
+                        if (topicId != null && !precreate && needManualSeal) {
+                            producer.seal(topicId);
                             producer.flush();
-                            // 사전 생성 모드는 모든 워커의 생산/flush 완료 후 메인 스레드에서 seal한다.
-                            if (!precreate) {
-                                producer.seal(topic);
-                                producer.flush();
-                            }
                         }
                     } finally {
                         if (!shareProducer) {
@@ -641,76 +624,82 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                 }
             }
         }
-    }
 
-    private static <T> T await(Future<T> future, long timeout) throws Exception {
-        return future.get(timeout, TimeUnit.MILLISECONDS);
-    }
+        private class TransientTopicProducerCallback implements TransientCallback {
+            private final String message;
+            private final long requestMs;
+            private final long topicCreateRequestMs;
+            private final TopicMetrics metrics;
+            private final int messageIndex;
+            private final long requestNanos;
+            private ProducerTimingProbe.Sample timingSample;
 
-    private class TransientTopicProducerCallback implements TransientCallback {
-        private final String message;
-        private final long requestMs;
-        private final long topicCreateRequestMs;
-        private final TopicMetrics metrics;
-        private final String topicName;
-        private final int messageIndex;
-        private final long requestNanos;
-        private final boolean needFullRecrod;
-        private ProducerTimingProbe.Sample timingSample;
-
-        private TransientTopicProducerCallback(
+            private TransientTopicProducerCallback(
                 String message,
                 long requestMs,
                 long topicCreateRequestMs,
                 TopicMetrics metrics,
-                String topicName,
                 int messageIndex,
-                long requestNanos,
-                boolean needFullRecord
-        ) {
-            this.message = message;
-            this.requestMs = requestMs;
-            this.topicCreateRequestMs = topicCreateRequestMs;
-            this.metrics = metrics;
-            this.topicName = topicName;
-            this.messageIndex = messageIndex;
-            this.requestNanos = requestNanos;
-            this.needFullRecrod = needFullRecord;
-        }
+                long requestNanos
+            ) {
+                this.message = message;
+                this.requestMs = requestMs;
+                this.topicCreateRequestMs = topicCreateRequestMs;
+                this.metrics = metrics;
+                this.messageIndex = messageIndex;
+                this.requestNanos = requestNanos;
+            }
 
-        @Override
-        public void onCompletion(TransientRecordMetadata metadata, Exception exception) {
-            // 기존 latency에 진단 집계 소요시간을 섞지 않도록 응답 시각부터 확보한다.
-            long responseMs = TimeUtils.getCurrentTimeMillis();
-            if (timingSample != null) timingSample.completed(System.nanoTime(), exception != null);
-            // 실패는 ignoreResponse 여부와 무관하게 집계한다. 성공 통계/전송 방식은 그대로 유지한다.
-            if (exception != null) {
-                int failures = metrics.callbackFailureCount.incrementAndGet();
-                if (messageIndex == 0) metrics.firstRecordFailureCount.incrementAndGet();
-                // 반복 오류의 Sender 스레드 로그 부하를 제한하고, 종료 시 누적/생략 수를 남긴다.
-                if (failures <= 5) {
-                    String detail = String.valueOf(exception.getMessage()).replace('\n', ' ').replace('\r', ' ');
-                    if (detail.length() > 512) detail = detail.substring(0, 512);
-                    log.error("Callback failure: kst={}, topic={}, messageIndex={}, creationRecord={}, elapsedMs={}, deliveryTimeoutMs={}, requestTimeoutMs={}, maxBlockMs={}, vehicleLifetimeMs={}, exception={}, detail={}",
+            @Override
+            public void onCompletion(TransientRecordMetadata metadata, Exception exception) {
+                // 기존 latency에 진단 집계 소요시간을 섞지 않도록 응답 시각부터 확보한다.
+                long responseMs = TimeUtils.getCurrentTimeMillis();
+                if (timingSample != null) timingSample.completed(System.nanoTime(), exception != null);
+                // 실패는 ignoreResponse 여부와 무관하게 집계한다. 성공 통계/전송 방식은 그대로 유지한다.
+                if (exception != null) {
+                    int failures = metrics.callbackFailureCount.incrementAndGet();
+                    if (messageIndex == 0) metrics.firstRecordFailureCount.incrementAndGet();
+                    // 반복 오류의 Sender 스레드 로그 부하를 제한하고, 종료 시 누적/생략 수를 남긴다.
+                    if (failures <= 5) {
+                        String detail = String.valueOf(exception.getMessage()).replace('\n', ' ').replace('\r', ' ');
+                        if (detail.length() > 512) detail = detail.substring(0, 512);
+                        log.error("Callback failure: kst={}, topic={}, messageIndex={}, isCreationRecord={}, elapsedMs={}, deliveryTimeoutMs={}, requestTimeoutMs={}, maxBlockMs={}, vehicleLifetimeMs={}, exception={}, detail={}",
                             OffsetDateTime.now(java.time.ZoneOffset.ofHours(9)), metrics.topicName,
-                            messageIndex, messageIndex == 0,
+                            messageIndex, topicId == null,
                             TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - requestNanos),
                             callbackConfig.getInt(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG),
                             callbackConfig.getInt(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG),
                             callbackConfig.getLong(ProducerConfig.MAX_BLOCK_MS_CONFIG), effectiveTopicLifetimeMs(),
                             exception.getClass().getName(), detail);
+                    }
+                    return;
                 }
-                return;
-            }
-            if (ignoreResponse) {
-                return;
-            }
-            metrics.addProduceLatency(responseMs - requestMs);
-            if (needFullRecrod) {
-                newMonitoringQueue.enqueue(new JsonBasedLatencyMonitorLog(messageAdaptor, message, "SUCCESS", responseMs));
-                newMonitorLogWriter.notifyIfNeeded();
+                if (ignoreResponse) {
+                    return;
+                }
+                if (topicId == null) {
+                    synchronized (targetTopics) {
+                        if (topicId == null) {
+                            topicId = metadata.id();
+                            targetTopics.add(
+                                new PreparedTopic(new TransientTopicHandle(topicId, topicName), topicCreateRequestMs,
+                                    responseMs - topicCreateRequestMs));
+                            metrics.addTopicCreateLatency(responseMs - topicCreateRequestMs);
+                        }
+                    }
+                } else {
+                    metrics.addProduceLatency(responseMs - requestMs);
+                }
+                if (needFullRecord) {
+                    newMonitoringQueue.enqueue(new JsonBasedLatencyMonitorLog(messageAdaptor, message, "SUCCESS", responseMs));
+                    newMonitorLogWriter.notifyIfNeeded();
+                }
             }
         }
+    }
+
+    private static <T> T await(Future<T> future, long timeout) throws Exception {
+        return future.get(timeout, TimeUnit.MILLISECONDS);
     }
 
     private void initMonitor() {

@@ -146,7 +146,7 @@ class AutoTransientTopicPrecreateTest {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
             Future<?> sealing = executor.submit(() -> {
-                app.sealPreparedTopics(topics, topic -> {
+                app.sealTopics(topics, topic -> {
                     sealed.add(topic);
                     if (sealed.size() == 1) return CompletableFuture.completedFuture(null);
                     lastRequested.countDown();
@@ -170,7 +170,7 @@ class AutoTransientTopicPrecreateTest {
         List<AutoTransientTopicProducerMetrics.PreparedTopic> topics = app.precreateTopics(
                 name -> CompletableFuture.completedFuture(handle(name)), deadline());
         IllegalStateException failure = new IllegalStateException("seal rejected");
-        ExecutionException error = assertThrows(ExecutionException.class, () -> app.sealPreparedTopics(
+        ExecutionException error = assertThrows(ExecutionException.class, () -> app.sealTopics(
                 topics, topic -> CompletableFuture.failedFuture(failure), 1000));
         assertSame(failure, error.getCause());
     }
@@ -180,7 +180,7 @@ class AutoTransientTopicPrecreateTest {
         AutoTransientTopicProducerMetrics app = app("--topic-cnt", "1");
         List<AutoTransientTopicProducerMetrics.PreparedTopic> topics = app.precreateTopics(
                 name -> CompletableFuture.completedFuture(handle(name)), deadline());
-        assertThrows(TimeoutException.class, () -> app.sealPreparedTopics(
+        assertThrows(TimeoutException.class, () -> app.sealTopics(
                 topics, topic -> new CompletableFuture<>(), 50));
     }
 }
