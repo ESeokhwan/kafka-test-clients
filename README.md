@@ -9,58 +9,6 @@
 | `transient` | `AutoTransientTopicProducerMetrics` | 워커에서 UUID 기반 생성, 선택적으로 Transient reset |
 | `transient-precreate` | `AutoTransientTopicProducerMetrics --precreate` | 전체 사전 생성, 전체 생산 완료 후 전체 seal, 선택적으로 Transient reset |
 
-## Monitoring 로그 rollout 앱
-
-`BrokerExtension` 앱은 클라이언트 호스트에서 지정한 **브로커 한 대**에 extension 요청을 보내고
-응답을 기다린다. 커스텀 `kafka-clients`를 포함해 `:apps:shadowJar`로 빌드하면 실행 환경에서
-`kafka-tt` 소스나 `kafka-broker-extension.sh`의 위치를 알 필요가 없다.
-빌드 환경의 Kafka 소스 위치는 `local.settings.gradle`의 `CUSTOM_KAFKA_PATH`로 지정한다.
-
-```bash
-bash scripts/kafka_clients_run.sh apps BrokerExtension \
-  --broker localhost:9092 \
-  --target monitor-log-rollout \
-  --operation flush-and-rollout \
-  --timeout-ms 30000
-```
-
-성공 시 `0`, 요청 오류·연결 실패·시간 초과 시 `1`, 인수 오류 시 `2`, Java 대기 중
-인터럽트 시 `130`으로 종료한다. 별도 결과 파일은 만들지 않으며, 호출하는 스크립트는
-종료 코드로 성공 여부를 확인하면 된다. `--help`는 브로커에 연결하지 않는다.
-
-`-b`, `--bootstrap-server`는 `--broker`의 별칭이다. 쉼표로 구분한 여러 주소는 받지 않는다.
-여러 브로커의 로그를 전환하려면 각 주소에 따로 호출하고 모두 성공했는지 확인해야 한다.
-`--command-config FILE`로 SSL/SASL 등 Kafka client properties를 읽으며 명시한 브로커와
-timeout이 파일의 `bootstrap.servers`, `request.timeout.ms`보다 우선한다.
-`--timeout-ms`는 클라이언트 설정 후 연결·인증·응답 대기까지 적용되며 브로커의 허용 timeout
-(기본 30000ms) 이하여야 한다. 시간 초과가 브로커에서 이미 시작한 작업의 취소를 뜻하지는 않는다.
-요청은 자동 재시도하거나 다른 브로커로 전환하지 않는다.
-
-`--target`의 기본값은 `monitor-log`이며 `--operation flush`로 파일 전환 없이 flush할 수도 있다.
-다른 extension은 `--target`, `--operation`, 선택적 UTF-8 `--payload`, `--payload-version`으로 호출한다.
-`--request-id`에는 Kafka UUID의 URL-safe Base64 표현을 지정할 수 있으며, 생략하면 새 ID를 생성해
-시작 로그에 표시한다. 같은 ID를 다시 보냈을 때의 중복 처리 방식은 브로커 handler에 따른다.
-
-브로커는 `broker.extension.request.enabled=true`와 접속 listener에 대한
-`broker.extension.request.allowed.listeners` 설정이 필요하다. Authorizer를 사용하면 클러스터
-`ALTER` 권한도 필요하다. Rollout은 monitoring writer 큐의 경계까지만 처리하므로 실험 종료 시
-생산기·삭제기의 종료를 먼저 기다려야 한다.
-
-`run_kafka_experiments.sh`는 매 실험 회차의 종료 처리에서 `BrokerExtension`을 자동 호출한다.
-정상 종료 시 cleanup/reset과 회차 간 대기까지 마친 뒤 호출하며, 실패·중단 시에도 기존 복구/종료
-처리가 끝난 뒤 시도한다. `--brokers`의 쉼표로 구분된 주소마다 한 번씩 요청하며, 단일·마지막
-회차에도 적용한다. 단독 `fio`, `delete`, `cleanup` 모드에는 적용하지 않는다.
-
-각 요청의 명령, stdout/stderr, 성공 여부와 종료 코드를 같은 회차의 `.run.txt`에 남긴다.
-실패는 `stage=MONITOR_ROLLOUT_FAILED ... exit_code=... continue=true`로 기록하며 자동 재시도 없이
-다른 브로커와 다음 실험을 계속한다. Rollout 실패는 원래 실험의 성공/실패 판정이나 복구 정책을
-바꾸지 않는다. 이전 apps JAR에 앱이 없는 경우에도 실행 오류를 기록하고 계속한다.
-
-실행기의 `--monitor-rollout-timeout-ms`(기본 30000)는 각 요청의 제한 시간이며,
-인증 설정이 필요하면 `--monitor-rollout-command-config FILE`을 지정한다.
-`MONITOR_ROLLOUT_TIMEOUT_MS`, `MONITOR_ROLLOUT_COMMAND_CONFIG` 환경 변수로도 설정할 수 있다.
-`--broker-ssh`를 사용해도 rollout 요청은 클라이언트 호스트에서 Kafka API로 전송한다.
-
 ## Transient 생산
 
 ```bash
