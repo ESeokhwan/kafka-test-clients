@@ -23,6 +23,30 @@ fio·TRIM·캐시 비우기는 실험에서 기본 ON이다. 실행기는 두 Tr
 apps JAR에는 이 생산 클래스와 커스텀 Kafka의 Transient API가 포함되어야 한다.
 빌드와 기존 JAR 재사용 모두에서 필요한 클래스의 존재를 확인한다.
 
+일반 Transient 모드는 첫 `send(topicName, ...)`에서 브로커의 자동 생성 기능을 사용한다.
+각 워커에서 명시적으로 생성한 뒤 생산하려면 생산기 옵션 `--need-manual-create`를 전달한다.
+
+```bash
+bash run_kafka_experiments.sh --topic-mode transient --hz 3 \
+  --need-manual-create --need-manual-seal
+```
+
+두 옵션은 실행기에서 직접 지정할 수 있으며 기본값은 모두 OFF다. `--no-manual-create`,
+`--no-manual-seal` 또는 `--need-manual-create=false`, `--need-manual-seal=false`로 끌 수 있다.
+`NEED_MANUAL_CREATE`, `NEED_MANUAL_SEAL` 환경 변수도 지원하며 CLI가 우선한다.
+설정은 회차별 `.run.txt`와 실제 생산기 명령에 기록한다. 기존 `--` 뒤 전달 방식도 지원한다.
+두 옵션은 `transient`, `transient-precreate` 실험에서만 켤 수 있다.
+
+이 옵션은 모든 토픽을 한꺼번에 준비하지 않고, 기존 Hz 간격으로 시작한 각 워커에서
+`producer.create(topicName)`의 응답을 기다린 뒤 반환된 UUID로 메시지를 전송한다.
+생성 대기는 Producer의 `delivery.timeout.ms`로 제한한다. 생성 실패·시간 초과 시 해당 워커만
+오류 로그를 남기고 종료하며, 다른 워커는 각자 생성·생산을 계속한다. 실패한 토픽은 자동 생성으로
+전환하지 않는다. 개별 생성 실패를 전체 앱 오류로 전파하지 않고, 나머지 워커가 완료되면
+생성된 토픽의 seal과 metrics 저장을 수행한다. 생성 시간은 `TopicCreateLatencyMs`에 기록하고
+`--topic-lifetime-ms`에서는 제외한다. 첫 메시지부터 생산 latency 통계에 포함하며,
+`--share-producer`, `--need-manual-seal`과 함께 사용할 수 있다.
+`--precreate`와 함께 지정하면 사전 생성된 토픽을 사용하므로 중복 생성하지 않는다.
+
 Transient 토픽을 모두 생성한 다음 생산하려면 `transient-precreate` 모드를 사용한다.
 
 ```bash
