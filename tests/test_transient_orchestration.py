@@ -188,6 +188,7 @@ class TransientOrchestrationTests(unittest.TestCase):
             "TOPIC_MODE", "CLEANUP_ENABLED", "DELETE_ENABLED", "TRANSIENT_RESET_SCRIPT",
             "BROKER_SSH", "BROKER_PROJECT_DIR", "BUILD_ENABLED", "RETRY", "PREFIX",
             "CLEANUP_TOPIC_PREFIX", "DELETE_TOPIC_PREFIX", "EXPERIMENT_CLASS_DIR",
+            "NEED_MANUAL_CREATE", "NEED_MANUAL_SEAL",
             "MONITOR_ROLLOUT_TIMEOUT_MS", "MONITOR_ROLLOUT_COMMAND_CONFIG",
         ):
             self.env.pop(name, None)
@@ -445,6 +446,89 @@ class TransientOrchestrationTests(unittest.TestCase):
             f"--topic-mode={self.topic_mode}", "--no-cleanup", "--stats-disabled"))
         self.assertFalse(list(self.output.rglob("*_metrics.csv")))
         self.assertIn("status=SUCCESS", self.metadata())
+
+    def test_manual_options_default_to_disabled(self):
+        self.assert_success(self.run_case("--topic-mode", self.topic_mode, "--no-cleanup"))
+        args = self.calls("producer")[0]["args"]
+        self.assertNotIn("--need-manual-create", args)
+        self.assertNotIn("--need-manual-seal", args)
+        self.assertIn("NEED_MANUAL_CREATE=false\n", self.metadata())
+        self.assertIn("NEED_MANUAL_SEAL=false\n", self.metadata())
+
+    def test_manual_create_and_seal_are_forwarded_and_recorded_for_every_round(self):
+        self.assert_success(self.run_case("--topic-mode", self.topic_mode, "--no-cleanup", "--retry", "2",
+                                          "--need-manual-create", "--need-manual-seal"))
+        producers = self.calls("producer")
+        self.assertEqual(len(producers), 2)
+        for producer in producers:
+            self.assertEqual(producer["args"].count("--need-manual-create"), 1)
+            self.assertEqual(producer["args"].count("--need-manual-seal"), 1)
+        for record in self.output.rglob("*.run.txt"):
+            text = record.read_text()
+            self.assertIn("NEED_MANUAL_CREATE=true\n", text)
+            self.assertIn("NEED_MANUAL_SEAL=true\n", text)
+            command, = [line for line in text.splitlines() if line.startswith("PRODUCER_COMMAND=")]
+            self.assertIn("--need-manual-create", command)
+            self.assertIn("--need-manual-seal", command)
+
+    def test_manual_options_can_be_enabled_independently(self):
+        for option, other in (("--need-manual-create", "--need-manual-seal"),
+                              ("--need-manual-seal", "--need-manual-create")):
+            with self.subTest(option=option):
+                self.assert_success(self.run_case("--topic-mode", self.topic_mode, "--no-cleanup", option))
+                args = self.calls("producer")[-1]["args"]
+                self.assertEqual(args.count(option), 1)
+                self.assertNotIn(other, args)
+
+    def test_explicit_off_overrides_environment(self):
+        self.assert_success(self.run_case("--topic-mode", self.topic_mode, "--no-cleanup",
+                                          "--no-manual-create", "--need-manual-seal=false",
+                                          env={"NEED_MANUAL_CREATE": "true", "NEED_MANUAL_SEAL": "true"}))
+        args = self.calls("producer")[0]["args"]
+        self.assertNotIn("--need-manual-create", args)
+        self.assertNotIn("--need-manual-seal", args)
+        self.assertIn("NEED_MANUAL_CREATE=false\n", self.metadata())
+        self.assertIn("NEED_MANUAL_SEAL=false\n", self.metadata())
+
+    def test_manual_environment_and_explicit_boolean_options(self):
+        self.assert_success(self.run_case("--topic-mode", self.topic_mode, "--no-cleanup",
+                                          "--need-manual-create=true", env={"NEED_MANUAL_SEAL": "true"}))
+        args = self.calls("producer")[0]["args"]
+        self.assertEqual(args.count("--need-manual-create"), 1)
+        self.assertEqual(args.count("--need-manual-seal"), 1)
+
+    def test_old_producer_arguments_are_merged_without_duplicates(self):
+        self.assert_success(self.run_case("--topic-mode", self.topic_mode, "--no-cleanup",
+                                          "--need-manual-create", "--need-manual-seal", "--",
+                                          "--need-manual-create=false", "--need-manual-seal", "--share-producer"))
+        args = self.calls("producer")[0]["args"]
+        self.assertNotIn("--need-manual-create", args)
+        self.assertNotIn("--need-manual-create=false", args)
+        self.assertEqual(args.count("--need-manual-seal"), 1)
+        self.assertIn("--share-producer", args)
+        self.assertIn("NEED_MANUAL_CREATE=false\n", self.metadata())
+        self.assertIn("NEED_MANUAL_SEAL=true\n", self.metadata())
+
+    def test_manual_options_are_rejected_for_normal_topic_modes_before_work(self):
+        for mode in ("auto", "precreate"):
+            for option in ("--need-manual-create", "--need-manual-seal"):
+                for extra in ((option,), ("--", option)):
+                    with self.subTest(mode=mode, extra=extra):
+                        result = self.run_case("--topic-mode", mode, "--build", *extra)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("Transient 실험에서만", result.stdout)
+                        self.assertEqual(self.calls(), [])
+
+    def test_invalid_manual_values_are_rejected_before_work(self):
+        for extra in (("--need-manual-create=invalid",), ("--need-manual-seal=0",),
+                      ("--no-manual-create=true",), ("--no-manual-seal=false",)):
+            with self.subTest(extra=extra):
+                result = self.run_case("--topic-mode", self.topic_mode, "--build", *extra)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.calls(), [])
+        result = self.run_case("--topic-mode", self.topic_mode, "--build", env={"NEED_MANUAL_CREATE": "invalid"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.calls(), [])
 
     def test_transient_iostat_is_collected_and_finalized(self):
         # Keep the mock experiment alive for one collection interval before stopping iostat.

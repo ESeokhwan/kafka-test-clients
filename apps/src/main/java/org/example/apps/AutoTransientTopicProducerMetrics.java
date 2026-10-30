@@ -31,6 +31,7 @@ import org.apache.kafka.clients.producer.KafkaTransientProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.TransientCallback;
 import org.apache.kafka.clients.producer.TransientRecordMetadata;
+import org.apache.kafka.clients.producer.TransientProducerRecord;
 import org.apache.kafka.clients.producer.TransientTopicHandle;
 import org.apache.kafka.common.Uuid;
 import org.apache.logging.log4j.ThreadContext;
@@ -94,7 +95,10 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     @Option(names = {"--need-flush"}, description = "If true, flush after each send. Default: false")
     private boolean needFlush = false;
 
-    @Option(names = {"--need-manual-seal"}, description = "If true, manually seal transient topic right after each workers is done. It does not work on precreate mode. Default: false")
+  @Option(names = "--need-manual-create", description = "Create each worker's transient topic and wait for its response before producing. --precreate takes precedence. Default: false")
+  private boolean needManualCreate;
+
+  @Option(names = {"--need-manual-seal"}, description = "If true, manually seal transient topic right after each workers is done. It does not work on precreate mode. Default: false")
     private boolean needManualSeal = false;
 
     // 진단은 기본 OFF이며, 기존 metrics CSV와 별도의 *_timing.csv에 저장한다.
@@ -191,7 +195,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         }
 
         log.info(
-                "AutoTopicProducerMetrics starting. topicCreateHz={}, topicCreateIntervalMs={}, expectedActiveTopics={}, runDurationMinutes={}, topicCnt={}, topicLifetimeMs={}, produceHzPerTopic={}, expectedSteadyRate={} msg/sec, metricsFile={}, statsDisabled={}, precreate={}",
+                "AutoTopicProducerMetrics starting. topicCreateHz={}, topicCreateIntervalMs={}, expectedActiveTopics={}, runDurationMinutes={}, topicCnt={}, topicLifetimeMs={}, produceHzPerTopic={}, expectedSteadyRate={} msg/sec, metricsFile={}, statsDisabled={}, precreate={}, manualCreate={}",
                 topicCreateHz,
                 TimeUnit.NANOSECONDS.toMillis(hzToIntervalNanos(topicCreateHz)),
                 expectedActiveTopics(),
@@ -202,7 +206,8 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                 expectedActiveTopics() * produceHzPerTopic,
                 normalizeCsvPath(metricsFile),
                 statsDisabled,
-                precreate
+                precreate,
+                needManualCreate
         );
 
         try {
@@ -336,6 +341,27 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     }
 
     record PreparedTopic(TransientTopicHandle handle, long requestMs, long latencyMs) {}
+
+    PreparedTopic prepareTopicForWorker(String name, PreparedTopic prepared,
+            Function<String, Future<TransientTopicHandle>> create, long timeoutMs) throws Exception {
+        if (prepared != null || !needManualCreate) return prepared;
+        if (!running.get() || Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException("Manual transient topic creation stopped");
+        }
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        long requestedAt = TimeUtils.getCurrentTimeMillis();
+        TransientTopicHandle handle = await(create.apply(name), remainingPrepareMs(deadline));
+        PreparedTopic created = new PreparedTopic(handle, requestedAt, TimeUtils.getCurrentTimeMillis() - requestedAt);
+        synchronized (targetTopics) {
+            targetTopics.add(created);
+        }
+        return created;
+    }
+
+    void failManualCreation(String name, Exception cause) {
+        log.error("Manual transient topic creation failed; stopping only this worker. Other workers continue. topic={}",
+                name, cause);
+    }
 
     private void sealTopics() {
         log.info("All produce workers finished. Sealing transient topics. count={}", targetTopics.size());
@@ -519,27 +545,45 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                 new ProducerTimingProbe(topicName, timingEpochNanos, hzToIntervalNanos(produceHzPerTopic),
                     workerEntered - timingEpochNanos, producerInitEnd - producerInitStart, phaseDelay)
                 : null;
-            // 최초 송신만 분산하고 그 뒤에 수명 시계를 시작하므로 생산 기회를 의도적으로 줄이지 않는다.
-            if (phaseDelay > 0) sleepUntil(System.nanoTime() + phaseDelay);
             TopicMetrics metrics = new TopicMetrics(topicName);
             long lifetimeNanos = TimeUnit.MILLISECONDS.toNanos(effectiveTopicLifetimeMs());
             long produceIntervalNanos = hzToIntervalNanos(produceHzPerTopic);
-            long startedNanos = System.nanoTime();
-            if (probe != null) probe.productionStarted(startedNanos);
-            long deadlineNanos = startedNanos + lifetimeNanos;
-            long nextProduceNanos = startedNanos;
             int sentCnt = 0;
+            boolean productionStarted = false;
 
             log.info("Topic worker started. topic={}, activeWorkers={}", topicName, activeWorkers.get());
 
-            long topicCreateRequestMs = preparedTopic == null
-                    ? TimeUtils.getCurrentTimeMillis() : preparedTopic.requestMs();
             try {
-                if (!running.get() || System.nanoTime() >= deadlineNanos) {
+                if (!running.get() || Thread.currentThread().isInterrupted()) {
                     return;
                 }
 
-                if (preparedTopic != null) metrics.addTopicCreateLatency(preparedTopic.latencyMs());
+                PreparedTopic readyTopic;
+                try {
+                    readyTopic = prepareTopicForWorker(topicName, preparedTopic, producer::create,
+                            callbackConfig.getInt(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    if (running.get()) failManualCreation(topicName, e);
+                    return;
+                } catch (Exception e) {
+                    failManualCreation(topicName, e);
+                    return;
+                }
+                if (readyTopic != null) {
+                    topicId = readyTopic.handle().id();
+                    metrics.addTopicCreateLatency(readyTopic.latencyMs());
+                }
+                // 생성 응답과 최초 송신 지연을 기다린 뒤 생산 수명을 시작한다.
+                if (phaseDelay > 0) sleepUntil(System.nanoTime() + phaseDelay);
+                if (!running.get() || Thread.currentThread().isInterrupted()) return;
+                long topicCreateRequestMs = readyTopic == null
+                        ? TimeUtils.getCurrentTimeMillis() : readyTopic.requestMs();
+                long startedNanos = System.nanoTime();
+                if (probe != null) probe.productionStarted(startedNanos);
+                productionStarted = true;
+                long deadlineNanos = startedNanos + lifetimeNanos;
+                long nextProduceNanos = startedNanos;
                 while (running.get() && System.nanoTime() < deadlineNanos) {
                     sleepUntil(nextProduceNanos);
                     if (!running.get() || System.nanoTime() >= deadlineNanos) {
@@ -563,7 +607,11 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                     );
                     callback.timingSample = sample;
                     try {
-                        producer.send(topicName, null, message, callback);
+                        if (needManualCreate && preparedTopic == null) {
+                            producer.send(new TransientProducerRecord<>(readyTopic.handle(), null, message), callback);
+                        } else {
+                            producer.send(topicName, null, message, callback);
+                        }
                     } catch (RuntimeException e) {
                         if (sample != null) sample.completed(System.nanoTime(), true);
                         throw e;
@@ -597,7 +645,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                     }
                 } finally {
                     metrics.finish(sentCnt);
-                    if (probe != null) {
+                    if (probe != null && productionStarted) {
                         synchronized (timingWriter) {
                             probe.write(timingWriter);
                         }

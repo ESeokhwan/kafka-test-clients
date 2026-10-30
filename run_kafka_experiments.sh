@@ -42,6 +42,8 @@ usage() {
       "precreate: 토픽 생성 → 선택적 fio → 데이터 생산 → cleanup (--no-delete --cleanup 필수)" \
       "transient: AutoTransientTopicProducerMetrics 사용, 일반 토픽 검사·사전 생성·JMX 삭제 생략" \
       "transient-precreate: 선택적 fio → Transient 전체 생성 → 전체 생산 완료 → 전체 seal → 선택적 reset" \
+      "Transient 수동 생성: --need-manual-create / --no-manual-create (기본 OFF)" \
+      "Transient 워커별 seal: --need-manual-seal / --no-manual-seal (기본 OFF)" \
       "Transient 정리: --cleanup (기본 ON)으로 apps ResetTransientTopics 실행, --no-cleanup으로 생략" \
       "reset 재정의: --transient-reset-script PATH (선택, 로컬 외부 reset 스크립트)" \
       "reset 인수: --bootstrap-server BROKERS --timeout-ms MS; 모든 Transient 클라이언트 종료 후 클러스터 전체 초기화" \
@@ -77,6 +79,21 @@ select_mode() {
     [[ -z "$selection" ]] || fail "--all, --hz, --mode는 한 번만 지정하세요."
     selection="$1"
 }
+set_manual_option() {
+    local option="${1%%=*}" enabled=true variable
+    case "$option" in
+        --need-manual-create) variable=NEED_MANUAL_CREATE ;;
+        --no-manual-create) variable=NEED_MANUAL_CREATE; enabled=false ;;
+        --need-manual-seal) variable=NEED_MANUAL_SEAL ;;
+        --no-manual-seal) variable=NEED_MANUAL_SEAL; enabled=false ;;
+    esac
+    if [[ "$1" == *=* ]]; then
+        [[ "$option" == --need-manual-* ]] || fail "$option 은 값을 받지 않는 플래그입니다."
+        enabled="${1#*=}"
+    fi
+    [[ "$enabled" == true || "$enabled" == false ]] || fail "$option 값은 true 또는 false입니다."
+    printf -v "$variable" '%s' "$enabled"
+}
 # 이름이 확인된 변수에만 대입하며 eval은 사용하지 않는다.
 while [[ $# -gt 0 ]]; do
     option="${1%%=*}"
@@ -84,6 +101,8 @@ while [[ $# -gt 0 ]]; do
         -h|--help) usage; exit 0 ;;
         --all|all) [[ "$1" != *=* ]] || fail "$option 에는 값이 없습니다."
             select_mode all; shift; continue ;;
+        --need-manual-create|--no-manual-create|--need-manual-seal|--no-manual-seal)
+            set_manual_option "$1"; shift; continue ;;
         --build|--no-build|--fio|--no-fio|--delete|--no-delete|--cleanup|--no-cleanup|--stats-disabled|--stats-enabled|--iostat|--no-iostat|--drop-caches|--no-drop-caches)
             [[ "$1" != *=* ]] || fail "$option 은 값을 받지 않는 플래그입니다."
             case "$option" in
@@ -127,12 +146,21 @@ while [[ $# -gt 0 ]]; do
             printf -v "${variable^^}" '%s' "$value" ;;
     esac
 done
+# 기존 -- 뒤의 생산기 옵션도 같은 설정으로 합쳐 중복 전달과 기록 불일치를 방지한다.
+producer_args=()
+for arg in "${extra_args[@]}"; do
+    case "${arg%%=*}" in
+        --need-manual-create|--no-manual-create|--need-manual-seal|--no-manual-seal)
+            set_manual_option "$arg" ;;
+        *) producer_args+=("$arg") ;;
+    esac
+done
 # 추가 생산기 인수만 이후 실행 단계에 전달한다.
 OUTPUT_LAYOUT="${OUTPUT_LAYOUT:-flat}"
 EXPERIMENT_LABEL="${EXPERIMENT_LABEL:-run}"
 [[ "$OUTPUT_LAYOUT" == flat || "$OUTPUT_LAYOUT" == nested ]] || fail '--output-layout은 flat 또는 nested입니다.'
 [[ "$EXPERIMENT_LABEL" =~ ^[a-zA-Z0-9_-]{1,24}$ ]] || fail '--experiment-label은 영숫자/_/- 1~24자입니다.'
-set -- "${extra_args[@]}"
+set -- "${producer_args[@]}"
 [[ "$mode" == experiment || $# -eq 0 ]] || fail "단독 모드에서는 생산기 옵션을 사용할 수 없습니다."
 # fio 자식 스크립트에서 읽는 설정을 명시적으로 전달한다.
 export FIO_PASSES="${FIO_PASSES:-3}" RESERVE_GIB="${RESERVE_GIB:-2}" EXPECTED_DISK="${EXPECTED_DISK:-nvme1n1}"
@@ -186,6 +214,8 @@ TOPIC_CNT="${TOPIC_CNT:--1}"
 TOPIC_MODE="${TOPIC_MODE:-auto}"
 TOPIC_PREPARE_TIMEOUT_SECONDS="${TOPIC_PREPARE_TIMEOUT_SECONDS:-300}"
 TRANSIENT_RESET_SCRIPT="${TRANSIENT_RESET_SCRIPT:-}"
+NEED_MANUAL_CREATE="${NEED_MANUAL_CREATE:-false}"
+NEED_MANUAL_SEAL="${NEED_MANUAL_SEAL:-false}"
 PRODUCER_CLASS=AutoTopicProducerMetrics
 case "$TOPIC_MODE" in
     auto|precreate) TRANSIENT_MODE=false ;;
@@ -215,9 +245,12 @@ INACTIVITY_THRESHOLD_MS="${INACTIVITY_THRESHOLD_MS:-600000}"
 DELETION_MODE="${DELETION_MODE:-BATCH}"
 CLEANUP_TIMEOUT_SECONDS="${CLEANUP_TIMEOUT_SECONDS:-300}"
 DELETE_START_TIMEOUT_SECONDS="${DELETE_START_TIMEOUT_SECONDS:-60}"
-for value in "$FIO_ENABLED" "$DELETE_ENABLED" "$CLEANUP_ENABLED" "$STATS_DISABLED" "$IOSTAT_ENABLED" "$DROP_CACHES" "$BUILD_ENABLED"; do
+for value in "$FIO_ENABLED" "$DELETE_ENABLED" "$CLEANUP_ENABLED" "$STATS_DISABLED" "$IOSTAT_ENABLED" "$DROP_CACHES" "$BUILD_ENABLED" "$NEED_MANUAL_CREATE" "$NEED_MANUAL_SEAL"; do
     [[ "$value" == true || "$value" == false ]] || fail "기능 스위치는 true/false로 지정하세요."
 done
+if [[ "$NEED_MANUAL_CREATE" == true || "$NEED_MANUAL_SEAL" == true ]]; then
+    [[ "$mode" == experiment && "$TRANSIENT_MODE" == true ]] || fail "--need-manual-create와 --need-manual-seal은 Transient 실험에서만 사용할 수 있습니다."
+fi
 if [[ "$TRANSIENT_MODE" == true ]]; then
     [[ "$mode" == experiment ]] || fail "--topic-mode $TOPIC_MODE 모드는 실험 모드(--all/--hz)에서만 지원합니다."
     [[ "$DELETE_ENABLED" == false ]] || fail "$TOPIC_MODE 모드에서는 일반 토픽 JMX 삭제기(--delete)를 사용할 수 없습니다."
@@ -371,6 +404,7 @@ start_record() {
         printf 'OUTPUT_LAYOUT=%s\nEXPERIMENT_LABEL=%s\n' "$OUTPUT_LAYOUT" "$EXPERIMENT_LABEL"
         printf 'TOPIC_MODE=%s\nTOPIC_PREPARE_TIMEOUT_SECONDS=%s\n' "$TOPIC_MODE" "$TOPIC_PREPARE_TIMEOUT_SECONDS"
         printf 'PRODUCER_CLASS=%s\nCLEANUP_POLICY=%s\nTRANSIENT_RESET_SCRIPT=%q\n' "$PRODUCER_CLASS" "$CLEANUP_POLICY" "$TRANSIENT_RESET_SCRIPT"
+        printf 'NEED_MANUAL_CREATE=%s\nNEED_MANUAL_SEAL=%s\n' "$NEED_MANUAL_CREATE" "$NEED_MANUAL_SEAL"
         if [[ "$TOPIC_MODE" == precreate ]]; then
             printf 'PRECREATE_SEED_MESSAGES_PER_TOPIC=1\nPRECREATE_SEED_ACKS=all\nPRECREATE_SEED_INCLUDED_IN_METRICS=false\n'
         else
@@ -1052,6 +1086,9 @@ for ((index=0; index<total_experiments; index++)); do
     fi
     if [[ "$TRANSIENT_MODE" == true ]]; then
         args+=(--full-file "$full_file")
+        [[ "$NEED_MANUAL_CREATE" == false ]] || args+=(--need-manual-create)
+        [[ "$NEED_MANUAL_SEAL" == false ]] || args+=(--need-manual-seal)
+        describe_step "  Transient 수동 생성=$NEED_MANUAL_CREATE, 워커별 수동 seal=$NEED_MANUAL_SEAL (사전 생성 모드는 전체 사전 생성·전체 seal 정책 적용)."
     fi
     if [[ "$TOPIC_MODE" == transient-precreate ]]; then
         args+=(--precreate --topic-prepare-timeout-seconds "$TOPIC_PREPARE_TIMEOUT_SECONDS")
