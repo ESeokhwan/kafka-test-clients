@@ -657,8 +657,9 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
             public void onCompletion(RecordMetadata metadata, Exception exception) {
                 // 기존 latency에 진단 집계 소요시간을 섞지 않도록 응답 시각부터 확보한다.
                 long responseMs = TimeUtils.getCurrentTimeMillis();
-                if (timingSample != null)
-                    timingSample.completed(System.nanoTime(), exception != null);
+		// 첫 레코드의 send 진입부터 성공 콜백 진입까지 측정한다. PRECREATE도 포함한다.
+                long responseNanos = System.nanoTime();
+                if (timingSample != null) timingSample.completed(System.nanoTime(), exception != null);
                 // 실패는 ignoreResponse 여부와 무관하게 집계한다. 성공 통계/전송 방식은 그대로 유지한다.
                 if (exception != null) {
                     int failures = metrics.callbackFailureCount.incrementAndGet();
@@ -684,13 +685,21 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
                     return;
                 }
 
+                // 기존 생성/일반 생산 통계의 모집단은 바꾸지 않고 별도 열에 기록한다.
+                if (messageIndex == 0) {
+                    double firstProduceLatencyMs = Math.max(0L, responseNanos - requestNanos) / 1_000_000.0;
+                    metrics.addFirstProduceLatency(firstProduceLatencyMs);
+                    // PRECREATE의 TopicCreate 열도 같은 첫 Produce 성공 지연을 기록한다.
+                    if (requireExistingTopics) metrics.addTopicCreateLatency(firstProduceLatencyMs);
+                }
+
                 if (exception == null && !firstMessage) {
                     metrics.addProduceLatency(responseMs - requestMs);
                 }
                 if (firstMessage) {
                     if (exception == null) {
                         metrics.addTopicCreateLatency(responseMs - topicCreateRequestMs);
-                    }
+		    }
                 }
                 if (needFullRecord) {
                     newMonitoringQueue.enqueue(new JsonBasedLatencyMonitorLog(messageAdaptor, message, "SUCCESS", responseMs));
@@ -739,12 +748,20 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
         LatencyHistogram all = new LatencyHistogram();
         double topicCreateTotal = 0.0;
         long topicCreateCount = 0L;
+        double firstProduceTotal = 0.0;
+        long firstProduceCount = 0L;
+        long firstProduceFailures = 0L;
         for (TopicMetricsResult row : rows) {
             all.merge(row.produceSnapshot);
             if (row.topicCreateLatencyMs != null) {
                 topicCreateTotal += row.topicCreateLatencyMs;
                 topicCreateCount++;
             }
+            if (row.firstProduceLatencyMs != null) {
+                firstProduceTotal += row.firstProduceLatencyMs;
+                firstProduceCount++;
+            }
+            firstProduceFailures += row.firstProduceFailureCount;
         }
         String allTopicCreateLatency = topicCreateCount == 0L
                 ? ""
@@ -752,9 +769,13 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
 
         try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(filePath, false)))) {
             writer.println(metricsHeader());
-            writer.println(all.snapshot("ALL").toCsvRow(allTopicCreateLatency));
+            writer.println(all.snapshot("ALL").toCsvRow(allTopicCreateLatency) + ","
+                    + (firstProduceCount == 0 ? "" : metricValue(firstProduceTotal / firstProduceCount))
+                    + "," + firstProduceCount + "," + firstProduceFailures);
             for (TopicMetricsResult row : rows) {
-                writer.println(row.produceSnapshot.toCsvRow(row.topicCreateLatencyValue()));
+                writer.println(row.produceSnapshot.toCsvRow(row.topicCreateLatencyValue()) + ","
+                        + (row.firstProduceLatencyMs == null ? "" : metricValue(row.firstProduceLatencyMs))
+                        + "," + (row.firstProduceLatencyMs == null ? 0 : 1) + "," + row.firstProduceFailureCount);
             }
             log.info("Wrote metrics CSV file {} rows={}", filePath, rows.size() + 1);
         } catch (IOException e) {
@@ -769,6 +790,7 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
             builder.append(",P").append(formatPercentileName(percentile)).append("(ms)");
         }
         builder.append(",TopicCreateLatencyMs");
+        builder.append(",FirstProduceLatencyMs,FirstProduceSuccessCount,FirstProduceFailureCount");
         return builder.toString();
     }
 
@@ -870,7 +892,8 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
     private static class TopicMetrics {
         private final String topicName;
         private final LatencyHistogram produce = new LatencyHistogram();
-        private Long topicCreateLatencyMs;
+        private Double topicCreateLatencyMs;
+        private Double firstProduceLatencyMs;
         private final AtomicInteger callbackFailureCount = new AtomicInteger();
         private final AtomicInteger firstRecordFailureCount = new AtomicInteger();
 
@@ -882,7 +905,11 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
             produce.add(latencyMs);
         }
 
-        private synchronized void addTopicCreateLatency(long latencyMs) {
+        private synchronized void addFirstProduceLatency(double latencyMs) {
+            if (firstProduceLatencyMs == null) firstProduceLatencyMs = latencyMs;
+        }
+
+        private synchronized void addTopicCreateLatency(double latencyMs) {
             if (topicCreateLatencyMs == null) {
                 topicCreateLatencyMs = latencyMs;
             }
@@ -904,19 +931,25 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
         }
 
         private synchronized TopicMetricsResult snapshotResult() {
-            return new TopicMetricsResult(topicName, produce.snapshot(topicName), topicCreateLatencyMs);
+            return new TopicMetricsResult(topicName, produce.snapshot(topicName), topicCreateLatencyMs,
+                    firstProduceLatencyMs, firstRecordFailureCount.get());
         }
     }
 
     private static class TopicMetricsResult {
         private final String topicName;
         private final StatsSnapshot produceSnapshot;
-        private final Long topicCreateLatencyMs;
+        private final Double topicCreateLatencyMs;
+        private final Double firstProduceLatencyMs;
+        private final int firstProduceFailureCount;
 
-        private TopicMetricsResult(String topicName, StatsSnapshot produceSnapshot, Long topicCreateLatencyMs) {
+        private TopicMetricsResult(String topicName, StatsSnapshot produceSnapshot, Double topicCreateLatencyMs,
+                                   Double firstProduceLatencyMs, int firstProduceFailureCount) {
             this.topicName = topicName;
             this.produceSnapshot = produceSnapshot;
             this.topicCreateLatencyMs = topicCreateLatencyMs;
+            this.firstProduceLatencyMs = firstProduceLatencyMs;
+            this.firstProduceFailureCount = firstProduceFailureCount;
         }
 
         private String topicCreateLatencyValue() {
@@ -1010,7 +1043,8 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
             builder.append(missingCount).append(',');
 
             if (count == 0) {
-                builder.append(",,,,");
+                // 4개의 빈 지연 열(Mean/Median/Min/Max) 사이에는 구분자 3개만 필요하다.
+                builder.append(",,,");
                 for (int i = 0; i < STATS_PERCENTILES.length; i++) {
                     builder.append(',');
                 }
