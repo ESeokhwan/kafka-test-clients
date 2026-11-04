@@ -1,7 +1,15 @@
 package org.example.apps;
 
-import moniq.util.IMessageAdaptor;
-import moniq.util.NaiveMessageGenerator;
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import moniq.JsonBasedLatencyMonitorLog;
+import moniq.MonitorQueue;
+import moniq.util.BasicRandomPayloadGenerator;
+import moniq.util.FastJsonBasedLatencyMonitoringMessageGenerator;
+import moniq.util.ILatencyMonitoringMessageAdaptor;
+import moniq.writer.MonitorLogWriter;
+import moniq.writer.strategy.CsvMonitorLogWriteStrategy;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.TopicDescription;
@@ -11,6 +19,7 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.apache.logging.log4j.ThreadContext;
 import org.example.core.AbstractCommand;
 import org.example.core.producer.ProducerService;
@@ -128,6 +137,9 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
     @Option(names = {"--metrics-file", "--produce-stats-file"}, description = "Output CSV file for per-topic produce statistics plus topic creation latency")
     private String metricsFile = "auto_topic_producer_metrics.csv";
 
+    @Option(names = {"--full-file"}, description = "Output CSV file all produce request's latency")
+    private String fullDataFile = "auto_topic_producer_full.csv";
+
     @Option(names = {"--stats-disabled"}, description = "If true, per-topic stats CSV files will not be created. Default: false")
     private boolean statsDisabled = false;
 
@@ -146,6 +158,11 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
     // 유효 기본값을 포함한 진단용 설정. 전송 옵션 자체는 변경하지 않는다.
     private ProducerConfig callbackConfig;
 
+    private final MonitorQueue newMonitoringQueue = new MonitorQueue();
+    private MonitorLogWriter newMonitorLogWriter;
+    private Thread newMonitorLogWriterThread;
+    private ILatencyMonitoringMessageAdaptor messageAdaptor;
+
     private final Thread emergencyCleanupHook = new Thread(() -> {
         log.info("Shutdown hook triggered, exiting application.");
         running.set(false);
@@ -153,6 +170,7 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
         waitForWorkers(TimeUnit.SECONDS.toMillis(10));
         writeMetricsFile();
         cleanupMonitor();
+        cleanupLogWriter();
     });
 
     public static void main(String[] args) {
@@ -165,6 +183,7 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
     @Override
     public void run() {
         validateOptions();
+        initMonitor();
         if (prepareTopicsOnly || requireExistingTopics || checkTopicsAbsent) {
             prepareOrVerifyTopics();
             if (prepareTopicsOnly || checkTopicsAbsent) return;
@@ -181,6 +200,8 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
         if (shareProducer) {
             sharedProducer = new KafkaProducer<>(createProducerConfig(prefix + "_shared"));
         }
+        messageAdaptor =
+            new FastJsonBasedLatencyMonitoringMessageGenerator(msgSize, new BasicRandomPayloadGenerator(Math.min(msgSize, 1000)));
 
         log.info(
                 "AutoTopicProducerMetrics starting. topicCreateHz={}, topicCreateIntervalMs={}, expectedActiveTopics={}, runDurationMinutes={}, topicCnt={}, topicLifetimeMs={}, produceHzPerTopic={}, expectedSteadyRate={} msg/sec, metricsFile={}, statsDisabled={}",
@@ -277,16 +298,15 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
                 seedConfig.put("max.block.ms", Long.toString(Math.min(60000, remainingPrepareMs(deadline))));
                 Producer<String, String> seedProducer = new KafkaProducer<>(seedConfig);
                 try {
-                    IMessageAdaptor seedMessages = new NaiveMessageGenerator(msgSize, Math.min(msgSize, 1000));
                     for (int i = 0; i < count; i++) {
                         String name = prefix + "_" + clientIndex + "_" + (startIndex + i);
-                        seedPreparedTopic(seedProducer, name, seedMessages.generate("precreate_" + i), deadline);
+                        seedPreparedTopic(seedProducer, name, messageAdaptor.generate("precreate_" + i), deadline);
                         if ((i + 1) % 100 == 0 || i + 1 == count)
                             log.info("Precreate seed: acknowledged={}/{}, messagesPerTopic=1, excludedFromMetrics=true", i + 1, count);
                     }
                 } finally {
                     // 전송 실패/시간 초과 시 무제한 flush하지 않고 상위 실행기의 실패 정리로 넘어간다.
-                    seedProducer.close(java.time.Duration.ofNanos(Math.max(0, deadline - System.nanoTime())));
+                    seedProducer.close(Duration.ofNanos(Math.max(0, deadline - System.nanoTime())));
                 }
             }
         } catch (Exception e) {
@@ -307,7 +327,7 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
             try {
                 return query.call();
             } catch (java.util.concurrent.ExecutionException e) {
-                if (!(e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException)) throw e;
+                if (!(e.getCause() instanceof UnknownTopicOrPartitionException)) throw e;
                 long waitMs = Math.min(1000, remainingPrepareMs(deadline));
                 log.info("Topic metadata pending: retryInMs={}, remainingMs={}", waitMs, remainingPrepareMs(deadline));
                 Thread.sleep(waitMs);
@@ -369,7 +389,11 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
             int topicIndex = startIndex + i;
             String topicName = prefix + "_" + clientIndex + "_" + topicIndex;
             Thread workerThread = new Thread(
-                    new TopicWorker(topicName, prefix + "_" + clientIndex + "_" + topicIndex),
+                    new TopicWorker(
+                        topicName,
+                        prefix + "_" + clientIndex + "_" + topicIndex,
+                        needFullRecord(targetTopicCnt, 5, i)
+                    ),
                     "AutoTopicProducerMetrics-" + topicName
             );
             workerThreads.add(workerThread);
@@ -377,6 +401,22 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
 
             nextLaunchNanos += topicCreateIntervalNanos;
         }
+    }
+
+    private static boolean needFullRecord(int n, int p, int x) {
+        if (n < 1 || p < 0 || p > n) {
+            return false;
+        }
+        if (x < 0 || x >= n || p == 0) return false;
+        if (p == 1) return x == 0;
+
+        long range = n - 1L;
+        long steps = p - 1L;
+
+        long index = (x * steps + range / 2) / range;
+        long selected = (index * range + steps / 2) / steps;
+
+        return selected == x;
     }
 
     private void joinWorkers() {
@@ -468,29 +508,29 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
     private class TopicWorker implements Runnable {
         private final String topicName;
         private final String clientId;
+        private final boolean needFullRecord;
 
-        private TopicWorker(String topicName, String clientId) {
+        private TopicWorker(String topicName, String clientId, boolean needFullRecord) {
             this.topicName = topicName;
             this.clientId = clientId;
+            this.needFullRecord = needFullRecord;
         }
 
         @Override
         public void run() {
             long workerEntered = timingDiagnostics ? System.nanoTime() : 0;
-            // 차량별 패딩을 생산 시작 전에 한 번 준비한다. 워커 사이에 가변 생성기를 공유하지 않는다.
-            final VehicleMessageGenerator messageGenerator = new VehicleMessageGenerator(msgSize);
             activeWorkers.incrementAndGet();
             long producerInitStart = timingDiagnostics ? System.nanoTime() : 0;
             Producer<String, String> producer = shareProducer
-                    ? sharedProducer
-                    : new KafkaProducer<>(createProducerConfig(clientId));
+                ? sharedProducer
+                : new KafkaProducer<>(createProducerConfig(clientId));
 
             long producerInitEnd = timingDiagnostics ? System.nanoTime() : 0;
             long phaseDelay = ProducerTimingProbe.phaseDelay(sendPhaseSeed, topicName,
-                    (long) (sendPhaseJitterMs * 1_000_000));
+                (long) (sendPhaseJitterMs * 1_000_000));
             ProducerTimingProbe probe = timingDiagnostics ? new ProducerTimingProbe(topicName,
-                    timingEpochNanos, hzToIntervalNanos(produceHzPerTopic),
-                    workerEntered - timingEpochNanos, producerInitEnd - producerInitStart, phaseDelay) : null;
+                timingEpochNanos, hzToIntervalNanos(produceHzPerTopic),
+                workerEntered - timingEpochNanos, producerInitEnd - producerInitStart, phaseDelay) : null;
             // 최초 송신만 분산하고 그 뒤에 수명 시계를 시작하므로 생산 기회를 의도적으로 줄이지 않는다.
             if (phaseDelay > 0) sleepUntil(System.nanoTime() + phaseDelay);
             TopicMetrics metrics = new TopicMetrics(topicName);
@@ -513,25 +553,25 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
                         break;
                     }
 
-                    String messageId = topicName + "_" + sentCnt;
-                    String message = messageGenerator.generate(messageId);
-                    ProducerRecord<String, String> record = new ProducerRecord<>(topicName, message);
                     long requestMs = TimeUtils.getCurrentTimeMillis();
+                    String messageId = (needFullRecord ? "R" : "") + topicName + "_" + sentCnt;
+                    String message = messageAdaptor.generate(messageId, requestMs);
 
                     long enteredSend = System.nanoTime();
                     ProducerTimingProbe.Sample sample = probe == null ? null : probe.begin(
-                            sentCnt, enteredSend - startedNanos, nextProduceNanos, enteredSend);
+                        sentCnt, enteredSend - startedNanos, nextProduceNanos, enteredSend);
                     TopicProducerCallback callback = new TopicProducerCallback(
-                                    firstSend && !requireExistingTopics,
-                                    requestMs,
-                                    topicCreateRequestMs,
-                                    metrics,
-                                    sentCnt,
-                                    enteredSend
-                            );
+                        message,
+                        firstSend && !requireExistingTopics,
+                        requestMs,
+                        topicCreateRequestMs,
+                        metrics,
+                        sentCnt,
+                        enteredSend
+                    );
                     callback.timingSample = sample;
                     try {
-                        producer.send(record, callback);
+                        producer.send(new ProducerRecord<>(topicName, message), callback);
                     } catch (RuntimeException e) {
                         if (sample != null) sample.completed(System.nanoTime(), true);
                         throw e;
@@ -562,89 +602,122 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
                     }
                 }
                 if (metrics.callbackFailureCount.get() > 0) {
-                    log.error("Callback failure summary: kst={}, topic={}, callbackFailures={}, firstRecordFailures={}, logged={}, suppressed={}, sentCnt={}. Ordinary CSV missing count excludes AUTO first record.",
-                            java.time.OffsetDateTime.now(java.time.ZoneOffset.ofHours(9)), topicName,
-                            metrics.callbackFailureCount.get(), metrics.firstRecordFailureCount.get(),
-                            Math.min(5, metrics.callbackFailureCount.get()),
-                            Math.max(0, metrics.callbackFailureCount.get() - 5), sentCnt);
+                    log.error(
+                        "Callback failure summary: kst={}, topic={}, callbackFailures={}, firstRecordFailures={}, logged={}, suppressed={}, sentCnt={}. Ordinary CSV missing count excludes AUTO first record.",
+                        OffsetDateTime.now(java.time.ZoneOffset.ofHours(9)), topicName,
+                        metrics.callbackFailureCount.get(), metrics.firstRecordFailureCount.get(),
+                        Math.min(5, metrics.callbackFailureCount.get()),
+                        Math.max(0, metrics.callbackFailureCount.get() - 5), sentCnt);
                 }
                 if (!statsDisabled) {
                     topicResults.add(metrics.snapshotResult());
                 }
                 int remain = activeWorkers.decrementAndGet();
                 log.info(
-                        "Topic worker stopped. topic={}, sentCnt={}, responseCnt={}, missingCnt={}, activeWorkers={}",
-                        topicName,
-                        sentCnt,
-                        metrics.produceSuccessCount(),
-                        metrics.produceMissingCount(),
-                        remain
+                    "Topic worker stopped. topic={}, sentCnt={}, responseCnt={}, missingCnt={}, activeWorkers={}",
+                    topicName,
+                    sentCnt,
+                    metrics.produceSuccessCount(),
+                    metrics.produceMissingCount(),
+                    remain
                 );
             }
         }
-    }
 
-    private class TopicProducerCallback implements Callback {
-        private final boolean firstMessage;
-        private final long requestMs;
-        private final long topicCreateRequestMs;
-        private final TopicMetrics metrics;
-        private final int messageIndex;
-        private final long requestNanos;
-        private ProducerTimingProbe.Sample timingSample;
+        private class TopicProducerCallback implements Callback {
 
-        private TopicProducerCallback(
+            private final String message;
+            private final boolean firstMessage;
+            private final long requestMs;
+            private final long topicCreateRequestMs;
+            private final TopicMetrics metrics;
+            private final int messageIndex;
+            private final long requestNanos;
+            private ProducerTimingProbe.Sample timingSample;
+
+            private TopicProducerCallback(
+                String message,
                 boolean firstMessage,
                 long requestMs,
                 long topicCreateRequestMs,
                 TopicMetrics metrics,
                 int messageIndex,
                 long requestNanos
-        ) {
-            this.firstMessage = firstMessage;
-            this.requestMs = requestMs;
-            this.topicCreateRequestMs = topicCreateRequestMs;
-            this.metrics = metrics;
-            this.messageIndex = messageIndex;
-            this.requestNanos = requestNanos;
-        }
+            ) {
+                this.message = message;
+                this.firstMessage = firstMessage;
+                this.requestMs = requestMs;
+                this.topicCreateRequestMs = topicCreateRequestMs;
+                this.metrics = metrics;
+                this.messageIndex = messageIndex;
+                this.requestNanos = requestNanos;
+            }
 
-        @Override
-        public void onCompletion(RecordMetadata metadata, Exception exception) {
-            // 기존 latency에 진단 집계 소요시간을 섞지 않도록 응답 시각부터 확보한다.
-            long responseMs = TimeUtils.getCurrentTimeMillis();
-            if (timingSample != null) timingSample.completed(System.nanoTime(), exception != null);
-            // 실패는 ignoreResponse 여부와 무관하게 집계한다. 성공 통계/전송 방식은 그대로 유지한다.
-            if (exception != null) {
-                int failures = metrics.callbackFailureCount.incrementAndGet();
-                if (messageIndex == 0) metrics.firstRecordFailureCount.incrementAndGet();
-                // 반복 오류의 Sender 스레드 로그 부하를 제한하고, 종료 시 누적/생략 수를 남긴다.
-                if (failures <= 5) {
-                    String detail = String.valueOf(exception.getMessage()).replace('\n', ' ').replace('\r', ' ');
-                    if (detail.length() > 512) detail = detail.substring(0, 512);
-                    log.error("Callback failure: kst={}, topic={}, messageIndex={}, firstRecord={}, creationRecord={}, elapsedMs={}, deliveryTimeoutMs={}, requestTimeoutMs={}, maxBlockMs={}, vehicleLifetimeMs={}, exception={}, detail={}",
-                            java.time.OffsetDateTime.now(java.time.ZoneOffset.ofHours(9)), metrics.topicName,
+            @Override
+            public void onCompletion(RecordMetadata metadata, Exception exception) {
+                // 기존 latency에 진단 집계 소요시간을 섞지 않도록 응답 시각부터 확보한다.
+                long responseMs = TimeUtils.getCurrentTimeMillis();
+                if (timingSample != null)
+                    timingSample.completed(System.nanoTime(), exception != null);
+                // 실패는 ignoreResponse 여부와 무관하게 집계한다. 성공 통계/전송 방식은 그대로 유지한다.
+                if (exception != null) {
+                    int failures = metrics.callbackFailureCount.incrementAndGet();
+                    if (messageIndex == 0) metrics.firstRecordFailureCount.incrementAndGet();
+                    // 반복 오류의 Sender 스레드 로그 부하를 제한하고, 종료 시 누적/생략 수를 남긴다.
+                    if (failures <= 5) {
+                        String detail = String.valueOf(exception.getMessage()).replace('\n', ' ').replace('\r', ' ');
+                        if (detail.length() > 512)
+                            detail = detail.substring(0, 512);
+                        log.error(
+                            "Callback failure: kst={}, topic={}, messageIndex={}, firstRecord={}, creationRecord={}, elapsedMs={}, deliveryTimeoutMs={}, requestTimeoutMs={}, maxBlockMs={}, vehicleLifetimeMs={}, exception={}, detail={}",
+                            OffsetDateTime.now(ZoneOffset.ofHours(9)), metrics.topicName,
                             messageIndex, messageIndex == 0, firstMessage,
                             TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - requestNanos),
                             callbackConfig.getInt(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG),
                             callbackConfig.getInt(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG),
                             callbackConfig.getLong(ProducerConfig.MAX_BLOCK_MS_CONFIG), effectiveTopicLifetimeMs(),
                             exception.getClass().getName(), detail);
+                    }
+                    return;
                 }
-                return;
-            }
-            if (ignoreResponse) {
-                return;
-            }
+                if (ignoreResponse) {
+                    return;
+                }
 
-            if (exception == null && !firstMessage) {
-                metrics.addProduceLatency(responseMs - requestMs);
-            }
-            if (firstMessage) {
-                if (exception == null) {
-                    metrics.addTopicCreateLatency(responseMs - topicCreateRequestMs);
+                if (exception == null && !firstMessage) {
+                    metrics.addProduceLatency(responseMs - requestMs);
+                }
+                if (firstMessage) {
+                    if (exception == null) {
+                        metrics.addTopicCreateLatency(responseMs - topicCreateRequestMs);
+                    }
+                }
+                if (needFullRecord) {
+                    newMonitoringQueue.enqueue(new JsonBasedLatencyMonitorLog(messageAdaptor, message, "SUCCESS", responseMs));
+                    newMonitorLogWriter.notifyIfNeeded();
                 }
             }
+        }
+    }
+
+    private void initMonitor() {
+        newMonitorLogWriter = new MonitorLogWriter(
+            newMonitoringQueue,
+            new CsvMonitorLogWriteStrategy(normalizeCsvPath(fullDataFile)),
+            monitoringBatchSize
+        );
+        newMonitorLogWriterThread = new Thread(newMonitorLogWriter);
+        newMonitorLogWriterThread.start();
+    }
+
+    private void cleanupLogWriter() {
+        if (newMonitorLogWriter == null) return;
+        newMonitorLogWriter.gracefulShutdown();
+        newMonitorLogWriter.syncedNotify();
+        try {
+            newMonitorLogWriterThread.join();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         }
     }
 

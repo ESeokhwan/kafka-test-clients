@@ -158,8 +158,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     private final MonitorQueue newMonitoringQueue = new MonitorQueue();
     private MonitorLogWriter newMonitorLogWriter;
     private Thread newMonitorLogWriterThread;
-    private final ILatencyMonitoringMessageAdaptor messageAdaptor =
-        new FastJsonBasedLatencyMonitoringMessageGenerator(0, new BasicRandomPayloadGenerator(1));
+    private ILatencyMonitoringMessageAdaptor messageAdaptor;
 
     private final Thread emergencyCleanupHook = new Thread(() -> {
         log.info("Shutdown hook triggered, exiting application.");
@@ -193,6 +192,8 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         if (shareProducer) {
             sharedProducer = new KafkaTransientProducer<>(createProducerConfig(prefix + "_shared"));
         }
+        messageAdaptor =
+            new FastJsonBasedLatencyMonitoringMessageGenerator(msgSize, new BasicRandomPayloadGenerator(Math.min(msgSize, 1000)));
 
         log.info(
                 "AutoTopicProducerMetrics starting. topicCreateHz={}, topicCreateIntervalMs={}, expectedActiveTopics={}, runDurationMinutes={}, topicCnt={}, topicLifetimeMs={}, produceHzPerTopic={}, expectedSteadyRate={} msg/sec, metricsFile={}, statsDisabled={}, precreate={}, manualCreate={}",
