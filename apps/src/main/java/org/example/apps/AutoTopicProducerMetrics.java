@@ -183,6 +183,8 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
     @Override
     public void run() {
         validateOptions();
+        messageAdaptor =
+            new FastJsonBasedLatencyMonitoringMessageGenerator(msgSize, new BasicRandomPayloadGenerator(Math.min(msgSize, 1000)));
         initMonitor();
         if (prepareTopicsOnly || requireExistingTopics || checkTopicsAbsent) {
             prepareOrVerifyTopics();
@@ -200,8 +202,6 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
         if (shareProducer) {
             sharedProducer = new KafkaProducer<>(createProducerConfig(prefix + "_shared"));
         }
-        messageAdaptor =
-            new FastJsonBasedLatencyMonitoringMessageGenerator(msgSize, new BasicRandomPayloadGenerator(Math.min(msgSize, 1000)));
 
         log.info(
                 "AutoTopicProducerMetrics starting. topicCreateHz={}, topicCreateIntervalMs={}, expectedActiveTopics={}, runDurationMinutes={}, topicCnt={}, topicLifetimeMs={}, produceHzPerTopic={}, expectedSteadyRate={} msg/sec, metricsFile={}, statsDisabled={}",

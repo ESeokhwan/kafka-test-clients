@@ -95,10 +95,10 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     @Option(names = {"--need-flush"}, description = "If true, flush after each send. Default: false")
     private boolean needFlush = false;
 
-  @Option(names = "--need-manual-create", description = "Create each worker's transient topic and wait for its response before producing. --precreate takes precedence. Default: false")
-  private boolean needManualCreate;
+    @Option(names = "--need-manual-create", description = "Create each worker's transient topic and wait for its response before producing. --precreate takes precedence. Default: false")
+    private boolean needManualCreate;
 
-  @Option(names = {"--need-manual-seal"}, description = "If true, manually seal transient topic right after each workers is done. It does not work on precreate mode. Default: false")
+    @Option(names = {"--need-manual-seal"}, description = "If true, manually seal transient topic right after each workers is done. It does not work on precreate mode. Default: false")
     private boolean needManualSeal = false;
 
     // 진단은 기본 OFF이며, 기존 metrics CSV와 별도의 *_timing.csv에 저장한다.
@@ -179,6 +179,8 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     @Override
     public void run() {
         validateOptions();
+        messageAdaptor =
+            new FastJsonBasedLatencyMonitoringMessageGenerator(msgSize, new BasicRandomPayloadGenerator(Math.min(msgSize, 1000)));
         initMonitor();
         Runtime.getRuntime().addShutdownHook(emergencyCleanupHook);
         warnDeprecatedOutputOptions();
@@ -192,8 +194,6 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         if (shareProducer) {
             sharedProducer = new KafkaTransientProducer<>(createProducerConfig(prefix + "_shared"));
         }
-        messageAdaptor =
-            new FastJsonBasedLatencyMonitoringMessageGenerator(msgSize, new BasicRandomPayloadGenerator(Math.min(msgSize, 1000)));
 
         log.info(
                 "AutoTopicProducerMetrics starting. topicCreateHz={}, topicCreateIntervalMs={}, expectedActiveTopics={}, runDurationMinutes={}, topicCnt={}, topicLifetimeMs={}, produceHzPerTopic={}, expectedSteadyRate={} msg/sec, metricsFile={}, statsDisabled={}, precreate={}, manualCreate={}",
