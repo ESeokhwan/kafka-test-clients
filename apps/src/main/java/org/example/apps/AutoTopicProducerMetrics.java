@@ -188,11 +188,11 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
         validateOptions();
         messageAdaptor =
             new FastJsonBasedLatencyMonitoringMessageGenerator(msgSize, new BasicRandomPayloadGenerator(Math.min(msgSize, 1000)));
-        initMonitor();
         if (prepareTopicsOnly || requireExistingTopics || checkTopicsAbsent) {
             prepareOrVerifyTopics();
             if (prepareTopicsOnly || checkTopicsAbsent) return;
         }
+        initMonitor();
         Runtime.getRuntime().addShutdownHook(emergencyCleanupHook);
         warnDeprecatedOutputOptions();
         callbackConfig = new ProducerConfig(createProducerConfig(prefix + "_diagnostic"));
@@ -246,6 +246,7 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
                 }
             }
         }
+        cleanupLogWriter(); // Drain selected message records before normal JVM exit.
         writeMetricsFile();
         Runtime.getRuntime().removeShutdownHook(emergencyCleanupHook);
     }

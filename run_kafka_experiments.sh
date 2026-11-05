@@ -1056,8 +1056,8 @@ for ((index=0; index<total_experiments; index++)); do
     if [[ "$TOPIC_MODE" == precreate ]]; then
         args+=(--require-existing-topics --topic-prepare-timeout-seconds "$TOPIC_PREPARE_TIMEOUT_SECONDS")
     fi
+    args+=(--full-file "$full_file")
     if [[ "$TRANSIENT_MODE" == true ]]; then
-        args+=(--full-file "$full_file")
         [[ "$NEED_MANUAL_CREATE" == false ]] || args+=(--need-manual-create)
         [[ "$NEED_MANUAL_SEAL" == false ]] || args+=(--need-manual-seal)
         describe_step "  Transient 수동 생성=$NEED_MANUAL_CREATE, 워커별 수동 seal=$NEED_MANUAL_SEAL (사전 생성 모드는 전체 사전 생성·전체 seal 정책 적용)."
@@ -1085,6 +1085,9 @@ for ((index=0; index<total_experiments; index++)); do
     if [[ "$STATS_DISABLED" == false ]]; then
         describe_step "[STEP 4 진행] 생산 CSV 확인 중: $metrics_file"
         [[ -s "$metrics_file" ]] || fail "생산 결과 CSV가 없습니다: $metrics_file"
+        if (( 10#$FULL_RECORD_TOPIC_COUNT > 0 && 10#$FULL_RECORD_TOPIC_COUNT <= planned_topics )); then
+            [[ -s "$full_file" ]] && awk 'NR==2 { found=1; exit } END { exit !found }' "$full_file" || fail "상세 기록 CSV에 데이터가 없습니다: $full_file"
+        fi
         csv_bytes="$(wc -c < "$metrics_file")"
         describe_step "[STEP 4 완료] 생산 CSV 확인 성공: ${csv_bytes} bytes, $metrics_file"
     else
