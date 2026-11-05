@@ -9,6 +9,26 @@
 | `transient` | `AutoTransientTopicProducerMetrics` | 워커에서 UUID 기반 생성, 선택적으로 Transient reset |
 | `transient-precreate` | `AutoTransientTopicProducerMetrics --precreate` | 전체 사전 생성, 전체 생산 완료 후 전체 seal, 선택적으로 Transient reset |
 
+## 메시지별 latency 기록 대상
+
+`AutoTopicProducerMetrics`와 `AutoTransientTopicProducerMetrics`는
+`--full-record-topic-count N`으로 상세 latency를 기록할 토픽 수를 지정한다.
+기본값은 기존과 같은 5이며 `needFullRecord(n, p, x)`의 `p`에 이 값을 전달한다.
+`0`은 상세 기록을 끄며 음수는 사용할 수 없다. 기존 선택 규칙에 따라 전체 토픽 수보다
+큰 값을 지정하면 어떤 토픽도 선택하지 않는다. 전체 토픽을 기록하려면 전체 토픽 수를 지정한다.
+선택한 토픽의 메시지별 latency CSV 경로는 `--full-file`로 지정한다.
+
+실험 실행기에서도 직접 지정할 수 있다.
+
+```bash
+bash run_kafka_experiments.sh --topic-mode transient --hz 3 \
+  --full-record-topic-count 10
+```
+
+실행기 기본값도 5이며 `FULL_RECORD_TOPIC_COUNT` 환경 변수보다 CLI가 우선한다.
+값은 각 회차의 `.run.txt`에 기록하고 일반·Transient 생산기에 동일하게 전달한다.
+기존 `--` 뒤 전달 방식도 지원하며 중복 지정한 경우 마지막 값을 한 번만 전달한다.
+
 ## Transient 생산
 
 ```bash

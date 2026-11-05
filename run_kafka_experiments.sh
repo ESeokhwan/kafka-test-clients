@@ -54,6 +54,7 @@ usage() {
       "TRIM 대기: --fstrim-wait-seconds 600 (기본/최소 600초, 완료 후 대기; --expected-disk로 장치 확인)" \
       "생산: --brokers --prefix --topic-cnt --run-duration-minutes --topic-lifetime-ms" \
       "      --produce-hz-per-topic --msg-size --start-index --start-barrier-delay-ms" \
+      "상세 latency: --full-record-topic-count 5 (0이면 상세 기록 OFF)" \
       "감시: --jmx-host --jmx-port --scan-interval-ms --scan-log-interval-ms" \
       "      --inactivity-check-interval-ms --inactivity-threshold-ms --deletion-mode" \
       "      --delete-start-timeout-seconds --delete-topic-prefix" \
@@ -117,7 +118,7 @@ while [[ $# -gt 0 ]]; do
             [[ "$1" != *=* ]] || fail "$option 은 값을 받지 않는 플래그입니다."
             if [[ "$option" == --fstrim ]]; then FSTRIM_ENABLED=true; else FSTRIM_ENABLED=false; fi
             shift; continue ;;
-        --fstrim-target-dir|--fstrim-wait-seconds|--broker-ssh|--broker-project-dir|--remote-identity-file|--remote-stage-timeout-seconds) ;;
+        --fstrim-target-dir|--fstrim-wait-seconds|--broker-ssh|--broker-project-dir|--remote-identity-file|--remote-stage-timeout-seconds|--full-record-topic-count) ;;
         --ignore-response|--need-flush|--share-producer)
             [[ "$1" != *=* ]] || fail "$option 은 값을 받지 않는 플래그입니다."
             extra_args+=("$1"); shift; continue ;;
@@ -146,10 +147,20 @@ while [[ $# -gt 0 ]]; do
 done
 # 기존 -- 뒤의 생산기 옵션도 같은 설정으로 합쳐 중복 전달과 기록 불일치를 방지한다.
 producer_args=()
-for arg in "${extra_args[@]}"; do
+for ((producer_arg_index=0; producer_arg_index<${#extra_args[@]}; producer_arg_index++)); do
+    arg="${extra_args[producer_arg_index]}"
     case "${arg%%=*}" in
         --need-manual-create|--no-manual-create|--need-manual-seal|--no-manual-seal)
             set_manual_option "$arg" ;;
+        --full-record-topic-count)
+            if [[ "$arg" == *=* ]]; then
+                FULL_RECORD_TOPIC_COUNT="${arg#*=}"
+            else
+                (( producer_arg_index + 1 < ${#extra_args[@]} )) || fail "--full-record-topic-count 값이 필요합니다."
+                producer_arg_index=$((producer_arg_index + 1))
+                FULL_RECORD_TOPIC_COUNT="${extra_args[producer_arg_index]}"
+            fi
+            [[ -n "$FULL_RECORD_TOPIC_COUNT" ]] || fail "--full-record-topic-count 값이 비어 있습니다." ;;
         *) producer_args+=("$arg") ;;
     esac
 done
@@ -206,6 +217,8 @@ RETRY="${RETRY:-1}"
 [[ "$mode" == experiment || "$RETRY" == 1 ]] || fail "--retry 반복은 실험 모드(--all/--hz)에서만 지원합니다."
 retry_index=1
 TOPIC_CNT="${TOPIC_CNT:--1}"
+FULL_RECORD_TOPIC_COUNT="${FULL_RECORD_TOPIC_COUNT:-5}"
+[[ "$FULL_RECORD_TOPIC_COUNT" =~ ^[0-9]{1,10}$ ]] && (( 10#$FULL_RECORD_TOPIC_COUNT <= 2147483647 )) || fail "--full-record-topic-count는 0~2147483647의 정수입니다."
 TOPIC_MODE="${TOPIC_MODE:-auto}"
 TOPIC_PREPARE_TIMEOUT_SECONDS="${TOPIC_PREPARE_TIMEOUT_SECONDS:-300}"
 TRANSIENT_RESET_SCRIPT="${TRANSIENT_RESET_SCRIPT:-}"
@@ -400,6 +413,7 @@ start_record() {
         printf 'TOPIC_MODE=%s\nTOPIC_PREPARE_TIMEOUT_SECONDS=%s\n' "$TOPIC_MODE" "$TOPIC_PREPARE_TIMEOUT_SECONDS"
         printf 'PRODUCER_CLASS=%s\nCLEANUP_POLICY=%s\nTRANSIENT_RESET_SCRIPT=%q\n' "$PRODUCER_CLASS" "$CLEANUP_POLICY" "$TRANSIENT_RESET_SCRIPT"
         printf 'NEED_MANUAL_CREATE=%s\nNEED_MANUAL_SEAL=%s\n' "$NEED_MANUAL_CREATE" "$NEED_MANUAL_SEAL"
+        printf 'FULL_RECORD_TOPIC_COUNT=%s\n' "$FULL_RECORD_TOPIC_COUNT"
         if [[ "$TOPIC_MODE" == precreate ]]; then
             printf 'PRECREATE_SEED_MESSAGES_PER_TOPIC=1\nPRECREATE_SEED_ACKS=all\nPRECREATE_SEED_INCLUDED_IN_METRICS=false\n'
         else
@@ -1036,7 +1050,8 @@ for ((index=0; index<total_experiments; index++)); do
         --start-index "$START_INDEX" --topic-cnt "$TOPIC_CNT" --topic-create-hz "$hz"
         --run-duration-minutes "$RUN_DURATION_MINUTES" --topic-lifetime-ms "$TOPIC_LIFETIME_MS"
         --produce-hz-per-topic "$PRODUCE_HZ_PER_TOPIC" --msg-size "$MSG_SIZE"
-        --start-barrier-delay "$START_BARRIER_DELAY_MS" --metrics-file "$metrics_file")
+        --start-barrier-delay "$START_BARRIER_DELAY_MS" --metrics-file "$metrics_file"
+        --full-record-topic-count "$FULL_RECORD_TOPIC_COUNT")
     [[ "$STATS_DISABLED" == false ]] || args+=(--stats-disabled)
     if [[ "$TOPIC_MODE" == precreate ]]; then
         args+=(--require-existing-topics --topic-prepare-timeout-seconds "$TOPIC_PREPARE_TIMEOUT_SECONDS")

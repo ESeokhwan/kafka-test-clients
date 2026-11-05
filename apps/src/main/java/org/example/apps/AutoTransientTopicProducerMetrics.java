@@ -133,8 +133,11 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     @Option(names = {"--metrics-file", "--produce-stats-file"}, description = "Output CSV file for per-topic produce statistics plus topic creation latency")
     private String metricsFile = "auto_transient_topic_producer_metrics.csv";
 
-    @Option(names = {"--full-file"}, description = "Output CSV file all produce request's latency")
+    @Option(names = {"--full-file"}, description = "Output CSV file for per-message latency of selected topics")
     private String fullDataFile = "transient_topic_producer_full.csv";
+
+    @Option(names = "--full-record-topic-count", description = "Number of topics selected for full latency recording. 0 disables; values above the total topic count select none. Default: 5")
+    private int fullRecordTopicCount = 5;
 
     @Option(names = {"--stats-disabled"}, description = "If true, per-topic stats CSV files will not be created. Default: false")
     private boolean statsDisabled = false;
@@ -196,7 +199,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
         }
 
         log.info(
-                "AutoTopicProducerMetrics starting. topicCreateHz={}, topicCreateIntervalMs={}, expectedActiveTopics={}, runDurationMinutes={}, topicCnt={}, topicLifetimeMs={}, produceHzPerTopic={}, expectedSteadyRate={} msg/sec, metricsFile={}, statsDisabled={}, precreate={}, manualCreate={}",
+                "AutoTopicProducerMetrics starting. topicCreateHz={}, topicCreateIntervalMs={}, expectedActiveTopics={}, runDurationMinutes={}, topicCnt={}, topicLifetimeMs={}, produceHzPerTopic={}, expectedSteadyRate={} msg/sec, metricsFile={}, statsDisabled={}, precreate={}, manualCreate={}, fullRecordTopicCount={}",
                 topicCreateHz,
                 TimeUnit.NANOSECONDS.toMillis(hzToIntervalNanos(topicCreateHz)),
                 expectedActiveTopics(),
@@ -208,7 +211,8 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                 normalizeCsvPath(metricsFile),
                 statsDisabled,
                 precreate,
-                needManualCreate
+                needManualCreate,
+                fullRecordTopicCount
         );
 
         try {
@@ -259,6 +263,9 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
     }
 
     private void validateOptions() {
+        if (fullRecordTopicCount < 0) {
+            throw new IllegalArgumentException("--full-record-topic-count must be non-negative");
+        }
         if (precreate && topicPrepareTimeoutSeconds < 1) {
             throw new IllegalArgumentException("--topic-prepare-timeout-seconds must be positive");
         }
@@ -404,7 +411,7 @@ public class AutoTransientTopicProducerMetrics extends AbstractCommand implement
                             topicName,
                             topicName,
                             precreate ? targetTopics.get(i) : null,
-                            needFullRecord(targetTopicCnt, 5, i)
+                            needFullRecord(targetTopicCnt, fullRecordTopicCount, i)
                     ),
                     "AutoTopicProducerMetrics-" + topicName
             );
