@@ -137,8 +137,11 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
     @Option(names = {"--metrics-file", "--produce-stats-file"}, description = "Output CSV file for per-topic produce statistics plus topic creation latency")
     private String metricsFile = "auto_topic_producer_metrics.csv";
 
-    @Option(names = {"--full-file"}, description = "Output CSV file all produce request's latency")
+    @Option(names = {"--full-file"}, description = "Output CSV file for per-message latency of selected topics")
     private String fullDataFile = "auto_topic_producer_full.csv";
+
+    @Option(names = "--full-record-topic-count", description = "Number of topics selected for full latency recording. 0 disables; values above the total topic count select none. Default: 5")
+    private int fullRecordTopicCount = 5;
 
     @Option(names = {"--stats-disabled"}, description = "If true, per-topic stats CSV files will not be created. Default: false")
     private boolean statsDisabled = false;
@@ -204,7 +207,7 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
         }
 
         log.info(
-                "AutoTopicProducerMetrics starting. topicCreateHz={}, topicCreateIntervalMs={}, expectedActiveTopics={}, runDurationMinutes={}, topicCnt={}, topicLifetimeMs={}, produceHzPerTopic={}, expectedSteadyRate={} msg/sec, metricsFile={}, statsDisabled={}",
+                "AutoTopicProducerMetrics starting. topicCreateHz={}, topicCreateIntervalMs={}, expectedActiveTopics={}, runDurationMinutes={}, topicCnt={}, topicLifetimeMs={}, produceHzPerTopic={}, expectedSteadyRate={} msg/sec, metricsFile={}, statsDisabled={}, fullRecordTopicCount={}",
                 topicCreateHz,
                 TimeUnit.NANOSECONDS.toMillis(hzToIntervalNanos(topicCreateHz)),
                 expectedActiveTopics(),
@@ -214,7 +217,8 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
                 produceHzPerTopic,
                 expectedActiveTopics() * produceHzPerTopic,
                 normalizeCsvPath(metricsFile),
-                statsDisabled
+                statsDisabled,
+                fullRecordTopicCount
         );
 
         startBarrier(startBarrierDelay);
@@ -342,6 +346,9 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
     }
 
     private void validateOptions() {
+        if (fullRecordTopicCount < 0) {
+            throw new IllegalArgumentException("--full-record-topic-count must be non-negative");
+        }
         if (timingDiagnostics && ignoreResponse) {
             throw new IllegalArgumentException("Timing ACK diagnostics requires responses; remove --ignore-response");
         }
@@ -392,7 +399,7 @@ public class AutoTopicProducerMetrics extends AbstractCommand implements Runnabl
                     new TopicWorker(
                         topicName,
                         prefix + "_" + clientIndex + "_" + topicIndex,
-                        needFullRecord(targetTopicCnt, 5, i)
+                        needFullRecord(targetTopicCnt, fullRecordTopicCount, i)
                     ),
                     "AutoTopicProducerMetrics-" + topicName
             );

@@ -189,6 +189,7 @@ class TransientOrchestrationTests(unittest.TestCase):
             "BROKER_SSH", "BROKER_PROJECT_DIR", "BUILD_ENABLED", "RETRY", "PREFIX",
             "CLEANUP_TOPIC_PREFIX", "DELETE_TOPIC_PREFIX", "EXPERIMENT_CLASS_DIR",
             "NEED_MANUAL_CREATE", "NEED_MANUAL_SEAL",
+            "FULL_RECORD_TOPIC_COUNT",
             "MONITOR_ROLLOUT_TIMEOUT_MS", "MONITOR_ROLLOUT_COMMAND_CONFIG",
         ):
             self.env.pop(name, None)
@@ -454,6 +455,57 @@ class TransientOrchestrationTests(unittest.TestCase):
         self.assertNotIn("--need-manual-seal", args)
         self.assertIn("NEED_MANUAL_CREATE=false\n", self.metadata())
         self.assertIn("NEED_MANUAL_SEAL=false\n", self.metadata())
+
+    def test_full_record_default_is_forwarded_and_recorded(self):
+        self.assert_success(self.run_case("--topic-mode", self.topic_mode, "--no-cleanup"))
+        args = self.calls("producer")[0]["args"]
+        self.assertEqual(args.count("--full-record-topic-count"), 1)
+        self.assertEqual(args[args.index("--full-record-topic-count") + 1], "5")
+        self.assertIn("FULL_RECORD_TOPIC_COUNT=5\n", self.metadata())
+
+    def test_full_record_zero_overrides_environment_for_normal_and_transient_producers(self):
+        for mode in ("auto", "precreate", self.topic_mode):
+            with self.subTest(mode=mode):
+                self.assert_success(self.run_case("--topic-mode", mode, "--full-record-topic-count", "0",
+                                                  env={"FULL_RECORD_TOPIC_COUNT": "10"}))
+                args = self.calls("producer")[-1]["args"]
+                self.assertEqual(args.count("--full-record-topic-count"), 1)
+                self.assertEqual(args[args.index("--full-record-topic-count") + 1], "0")
+        self.assertEqual(self.metadata().count("FULL_RECORD_TOPIC_COUNT=0\n"), 3)
+
+    def test_full_record_count_applies_to_every_round(self):
+        self.assert_success(self.run_case("--topic-mode", self.topic_mode, "--no-cleanup", "--retry", "2",
+                                          "--full-record-topic-count=10"))
+        producers = self.calls("producer")
+        self.assertEqual(len(producers), 2)
+        for producer in producers:
+            args = producer["args"]
+            self.assertEqual(args.count("--full-record-topic-count"), 1)
+            self.assertEqual(args[args.index("--full-record-topic-count") + 1], "10")
+        self.assertEqual(self.metadata().count("FULL_RECORD_TOPIC_COUNT=10\n"), 2)
+
+    def test_old_full_record_arguments_override_and_merge_without_duplicates(self):
+        for extra in (("--full-record-topic-count", "2"), ("--full-record-topic-count=2",)):
+            with self.subTest(extra=extra):
+                self.assert_success(self.run_case("--topic-mode", self.topic_mode, "--no-cleanup",
+                                                  "--full-record-topic-count", "10", "--", *extra, "--need-flush"))
+                args = self.calls("producer")[-1]["args"]
+                self.assertEqual(args.count("--full-record-topic-count"), 1)
+                self.assertEqual(args[args.index("--full-record-topic-count") + 1], "2")
+                self.assertNotIn("--full-record-topic-count=2", args)
+                self.assertIn("--need-flush", args)
+        self.assertEqual(self.metadata().count("FULL_RECORD_TOPIC_COUNT=2\n"), 2)
+
+    def test_invalid_full_record_count_is_rejected_before_work(self):
+        for extra in (("--full-record-topic-count", "-1"), ("--full-record-topic-count=abc",),
+                      ("--full-record-topic-count", "1.5"), ("--full-record-topic-count=2147483648",),
+                      ("--full-record-topic-count",), ("--", "--full-record-topic-count"),
+                      ("--", "--full-record-topic-count="), ("--", "--full-record-topic-count", "-1")):
+            with self.subTest(extra=extra):
+                result = self.run_case("--topic-mode", self.topic_mode, "--build", *extra)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("--full-record-topic-count", result.stdout)
+                self.assertEqual(self.calls(), [])
 
     def test_manual_create_and_seal_are_forwarded_and_recorded_for_every_round(self):
         self.assert_success(self.run_case("--topic-mode", self.topic_mode, "--no-cleanup", "--retry", "2",
